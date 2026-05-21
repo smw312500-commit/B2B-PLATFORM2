@@ -1,0 +1,248 @@
+========================================
+B2B 플랫폼 DB 설계 명세
+========================================
+작성일: 2026-05-21
+
+이 파일을 읽는 AI에게:
+MySQL 기준으로 아래 스키마를 구현할 것.
+서버는 1개, 스키마(데이터베이스)는 5개로 분리.
+각사 DB는 독립적으로 운영되며 플랫폼이 필요한 데이터만 수집.
+
+========================================
+전체 스키마 구성
+========================================
+
+MySQL 서버 1개
+  ├── company_fabric      (옷감사)
+  ├── company_label       (케어라벨사)
+  ├── company_zipper      (지퍼단추사)
+  ├── company_logistics   (물류사)
+  └── platform            (중앙 플랫폼)
+
+
+========================================
+1. company_fabric (옷감사 DB)
+========================================
+
+[ 재고 테이블: fabric_stock ]
+  id           INT AUTO_INCREMENT PK
+  fabric_code  VARCHAR(1)     -- 원단코드 C/P/L/W/M
+  color_code   VARCHAR(2)     -- 컬러코드 BK/WH/NV 등
+  stock_qty    DECIMAL(10,1)  -- 현재 재고량 (야드)
+  updated_at   DATETIME       -- 최종 업데이트
+
+[ 발주 테이블: fabric_order ]
+  id            INT AUTO_INCREMENT PK
+  material_name VARCHAR(50)   -- 원자재명 (원사 등)
+  order_qty     DECIMAL(10,1) -- 발주량 (kg)
+  supplier      VARCHAR(100)  -- 발주처
+  order_date    DATE          -- 발주일
+  due_date      DATE          -- 납기요청일
+  status        VARCHAR(20)   -- 대기중/입고완료/취소
+  note          TEXT          -- 비고
+
+[ 출고 테이블: fabric_release ]
+  id           INT AUTO_INCREMENT PK
+  fabric_code  VARCHAR(1)     -- 원단코드
+  color_code   VARCHAR(2)     -- 컬러코드
+  release_qty  DECIMAL(10,1)  -- 출고량 (야드)
+  due_date     DATE           -- 납기일
+  status       VARCHAR(20)    -- 생산중/출고완료
+  release_date DATE           -- 실제 출고일
+  created_at   DATETIME
+
+
+========================================
+2. company_label (케어라벨사 DB)
+========================================
+
+[ 재고 테이블: label_stock ]
+  id            INT AUTO_INCREMENT PK
+  material_name VARCHAR(50)   -- 라벨원단 / 잉크
+  unit          VARCHAR(10)   -- m / 통
+  stock_qty     DECIMAL(10,1) -- 현재 재고량
+  updated_at    DATETIME
+
+[ 발주 테이블: label_order ]
+  id            INT AUTO_INCREMENT PK
+  material_name VARCHAR(50)   -- 원자재명
+  order_qty     DECIMAL(10,1) -- 발주량
+  supplier      VARCHAR(100)  -- 발주처
+  order_date    DATE
+  due_date      DATE
+  status        VARCHAR(20)   -- 대기중/입고완료/취소
+  note          TEXT
+
+[ 출고 테이블: label_release ]
+  id           INT AUTO_INCREMENT PK
+  label_code   VARCHAR(9)     -- 라벨코드 9자리 (핵심 키)
+  release_qty  INT            -- 출고량 (장)
+  due_date     DATE           -- 납기일
+  status       VARCHAR(20)    -- 생산중/출고완료
+  release_date DATE
+  created_at   DATETIME
+
+
+========================================
+3. company_zipper (지퍼단추사 DB)
+========================================
+
+[ 재고 테이블: zipper_stock ]
+  id           INT AUTO_INCREMENT PK
+  item_name    VARCHAR(50)    -- 원목단추/플라스틱단추/금속단추/지퍼
+  material     VARCHAR(20)    -- 원목/플라스틱/금속
+  stock_qty    INT            -- 현재 재고량 (개)
+  updated_at   DATETIME
+
+[ 발주 테이블: zipper_order ]
+  id            INT AUTO_INCREMENT PK
+  material_name VARCHAR(50)   -- 원자재명
+  unit          VARCHAR(10)   -- kg / m
+  order_qty     DECIMAL(10,1) -- 발주량
+  supplier      VARCHAR(100)
+  order_date    DATE
+  due_date      DATE
+  status        VARCHAR(20)   -- 대기중/입고완료/취소
+  note          TEXT
+
+[ 출고 테이블: zipper_release ]
+  id           INT AUTO_INCREMENT PK
+  item_name    VARCHAR(50)    -- 단추/지퍼 종류
+  material     VARCHAR(20)    -- 소재
+  release_qty  INT            -- 출고량 (개)
+  due_date     DATE           -- 납기일
+  status       VARCHAR(20)    -- 생산중/출고완료
+  release_date DATE
+  created_at   DATETIME
+
+
+========================================
+4. company_logistics (물류사 DB)
+========================================
+
+[ 기사 테이블: driver ]
+  id           INT AUTO_INCREMENT PK
+  name         VARCHAR(50)    -- 기사명
+  phone        VARCHAR(20)    -- 연락처
+  location_si  VARCHAR(20)    -- 현재위치 (시)
+  location_gu  VARCHAR(20)    -- 현재위치 (구)
+  status       VARCHAR(20)    -- 가용/운행중/휴무
+
+[ 차량 테이블: vehicle ]
+  id           INT AUTO_INCREMENT PK
+  driver_id    INT FK→driver.id
+  plate_no     VARCHAR(20)    -- 차량번호
+  max_weight   DECIMAL(8,1)   -- 최대 적재량 (kg)
+  vehicle_type VARCHAR(30)    -- 트럭/탑차/화물차 등
+
+[ 운행 테이블: delivery ]
+  id             INT AUTO_INCREMENT PK
+  driver_id      INT FK→driver.id
+  vehicle_id     INT FK→vehicle.id
+  company_id     INT            -- 출발 회사ID (platform.company_info 참조)
+  destination    VARCHAR(20)    -- 인천항 / 부산항
+  cargo_detail   TEXT           -- 화물 내용
+  weight_kg      DECIMAL(8,1)   -- 무게 (kg)
+  due_date       DATE           -- 납기일
+  pickup_date    DATE           -- AI가 산출한 픽업 예정일
+  complete_date  DATE           -- 실제 완료일
+  status         VARCHAR(20)    -- 배차대기/운행중/완료
+  created_at     DATETIME
+
+
+========================================
+5. platform (중앙 플랫폼 DB)
+========================================
+
+[ 회사정보 테이블: company_info ]
+  id           INT AUTO_INCREMENT PK
+  company_name VARCHAR(100)   -- 회사명
+  company_type VARCHAR(20)    -- 생산사/물류사
+  address_si   VARCHAR(20)    -- 주소 (시)
+  address_gu   VARCHAR(20)    -- 주소 (구)
+
+  기본 데이터:
+  1 | 옷감사     | 생산사 | 부산시 | 사하구
+  2 | 케어라벨사 | 생산사 | 부산시 | 강서구
+  3 | 지퍼단추사 | 생산사 | 부산시 | 해운대구
+  4 | 물류사     | 물류사 | 서울시 | 강남구
+
+[ 출고수집 테이블: collected_release ]
+  id           INT AUTO_INCREMENT PK
+  company_id   INT FK→company_info.id
+  item_name    VARCHAR(100)   -- 물품명 (회사별 다름, 아래 참고)
+  quantity     DECIMAL(10,1)  -- 수량
+  unit         VARCHAR(10)    -- 야드/장/개
+  due_date     DATE           -- 납기일
+  status       VARCHAR(20)    -- 생산중/출고완료
+  collected_at DATETIME       -- 수집 시각
+
+  ※ 회사별 item_name 입력값 규칙:
+  ┌──────────────┬────────────────────────────────────────┐
+  │ 회사         │ item_name 값                           │
+  ├──────────────┼────────────────────────────────────────┤
+  │ 옷감사       │ 원단종류+컬러  예) 면_BK, 폴리에스터_NV │
+  │ 케어라벨사   │ 라벨코드 자체 예) W3MJW01NV            │
+  │              │ ← 라벨코드가 곧 케어라벨사의 물품명임  │
+  │ 지퍼단추사   │ 단추/지퍼 종류 예) 원목단추, 지퍼      │
+  └──────────────┴────────────────────────────────────────┘
+
+  ※ 케어라벨사의 item_name = 라벨코드 (9자리)
+    이 라벨코드가 플랫폼에서 3개 생산사를 연결하는 핵심 키로 사용됨
+
+[ 배차관리 테이블: dispatch ]
+  id           INT AUTO_INCREMENT PK
+  company_id   INT FK→company_info.id  -- 출발 회사
+  destination  VARCHAR(20)    -- 인천항 / 부산항
+  weight_kg    DECIMAL(8,1)   -- 무게
+  due_date     DATE           -- 납기일
+  pickup_date  DATE           -- AI 산출 픽업일
+  status       VARCHAR(20)    -- 대기/배차완료/운행중/완료
+  created_at   DATETIME
+
+[ 인사이트 테이블: insight_log ]
+  id           INT AUTO_INCREMENT PK
+  insight_type VARCHAR(50)    -- 납기위험/트렌드/물류최적화
+  content      TEXT           -- 인사이트 내용
+  related_code VARCHAR(9)     -- 관련 라벨코드 (있을 경우)
+  created_at   DATETIME
+
+
+========================================
+플랫폼 픽업일 계산 로직
+========================================
+
+도착지별 이동시간 기준:
+  부산항 출발 → 인천항 도착: 약 1일 (육로)
+  서울 출발   → 부산항 도착: 약 1일 (육로)
+
+픽업일 = 납기일 - 이동시간(1일) - 여유시간(1일)
+예) 납기일 6/10 → 픽업일 = 6/8
+
+GPT AI API가 아래 정보로 최적 픽업일 및 기사 배차 자동 산출:
+  - 납기일
+  - 도착지 (인천항/부산항)
+  - 기사 현재 위치 및 가용 상태
+  - 차량 적재 가능 무게
+  - 왕복 동선 최적화 (빈차 방지)
+
+
+========================================
+데이터 흐름 요약
+========================================
+
+생산사 3개 → 출고 완료 버튼 클릭
+    ↓
+각사 release 테이블 업데이트
+    ↓
+플랫폼이 collected_release 테이블로 수집
+    ↓
+GPT AI API가 납기일 기준 픽업일 자동 계산
+    ↓
+dispatch 테이블에 배차 생성
+    ↓
+물류사 delivery 테이블 업데이트
+    ↓
+기사에게 배차 알림
+
+========================================

@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install *)",
+      "Bash(npm run *)",
+      "Bash(pip install *)",
+      "Bash(pip3 install *)",
+      "Bash(uvicorn *)",
+      "Bash(npx *)",
+      "Bash(netstat -ano *)"
+    ]
+  }
+}
