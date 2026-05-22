@@ -1,39 +1,27 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from typing import List
-from datetime import date
 from database import get_db
-from models import ZipperOrder
-from schemas import OrderCreate, OrderResponse
+from models import ZipperOrder, ZipperStock
+from schemas import OrderCreate, OrderOut
 
 router = APIRouter(prefix="/orders", tags=["발주"])
 
 
-@router.get("/", response_model=List[OrderResponse])
+@router.get("/", response_model=list[OrderOut])
 def get_orders(db: Session = Depends(get_db)):
     return db.query(ZipperOrder).order_by(ZipperOrder.order_date.desc()).all()
 
 
-@router.get("/active", response_model=List[OrderResponse])
-def get_active_orders(db: Session = Depends(get_db)):
-    return (
-        db.query(ZipperOrder)
-        .filter(ZipperOrder.status == "대기중")
-        .order_by(ZipperOrder.order_date.desc())
-        .all()
-    )
-
-
-@router.post("/", response_model=OrderResponse, status_code=201)
+@router.post("/", response_model=OrderOut, status_code=201)
 def create_order(body: OrderCreate, db: Session = Depends(get_db)):
-    new_order = ZipperOrder(**body.model_dump())
-    db.add(new_order)
+    order = ZipperOrder(**body.model_dump())
+    db.add(order)
     db.commit()
-    db.refresh(new_order)
-    return new_order
+    db.refresh(order)
+    return order
 
 
-@router.put("/{order_id}/cancel", response_model=OrderResponse)
+@router.patch("/{order_id}/cancel", response_model=OrderOut)
 def cancel_order(order_id: int, db: Session = Depends(get_db)):
     order = db.query(ZipperOrder).filter(ZipperOrder.id == order_id).first()
     if not order:
@@ -46,14 +34,31 @@ def cancel_order(order_id: int, db: Session = Depends(get_db)):
     return order
 
 
-@router.put("/{order_id}/receive", response_model=OrderResponse)
+@router.patch("/{order_id}/receive", response_model=OrderOut)
 def receive_order(order_id: int, db: Session = Depends(get_db)):
-    """입고 완료 처리"""
+    """재고도착 버튼: 발주량을 원자재 재고에 더하고 입고완료 처리"""
     order = db.query(ZipperOrder).filter(ZipperOrder.id == order_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="발주를 찾을 수 없습니다")
     if order.status != "대기중":
         raise HTTPException(status_code=400, detail=f"입고 처리 불가 상태: {order.status}")
+
+    # 재고 항목 찾아서 수량 추가
+    stock = db.query(ZipperStock).filter(
+        ZipperStock.material_name == order.material_name
+    ).first()
+
+    if stock:
+        stock.stock_qty = float(stock.stock_qty) + float(order.order_qty)
+    else:
+        # 재고 항목이 없으면 신규 생성
+        new_stock = ZipperStock(
+            material_name=order.material_name,
+            unit=order.unit,
+            stock_qty=order.order_qty,
+        )
+        db.add(new_stock)
+
     order.status = "입고완료"
     db.commit()
     db.refresh(order)

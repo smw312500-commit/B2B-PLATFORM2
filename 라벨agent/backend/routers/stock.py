@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+from typing import List
 from database import get_db
 from models import LabelStock
-from schemas import LabelStockOut, LabelStockUpdate
+from schemas import LabelStockOut
 
 router = APIRouter(prefix="/stock", tags=["재고"])
 
@@ -12,12 +13,12 @@ def get_all_stock(db: Session = Depends(get_db)):
     return db.query(LabelStock).all()
 
 
-@router.patch("/{stock_id}", response_model=LabelStockOut)
-def update_stock(stock_id: int, body: LabelStockUpdate, db: Session = Depends(get_db)):
-    item = db.query(LabelStock).filter(LabelStock.id == stock_id).first()
-    if not item:
-        raise HTTPException(status_code=404, detail="재고 항목을 찾을 수 없습니다")
-    item.stock_qty = body.stock_qty
+@router.delete("/bulk")
+def delete_stock_bulk(ids: List[int], db: Session = Depends(get_db)):
+    deleted = db.query(LabelStock).filter(LabelStock.id.in_(ids)).all()
+    if not deleted:
+        raise HTTPException(status_code=404, detail="삭제할 항목이 없습니다")
+    for item in deleted:
+        db.delete(item)
     db.commit()
-    db.refresh(item)
-    return item
+    return {"deleted": len(deleted)}

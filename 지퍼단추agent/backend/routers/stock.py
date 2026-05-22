@@ -1,49 +1,23 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from typing import List
 from database import get_db
-from models import ZipperStock, RawMaterialStock
-from schemas import StockResponse, StockUpdate, RawMaterialResponse, RawMaterialUpdate
+from models import ZipperStock
+from schemas import StockOut
 
 router = APIRouter(prefix="/stock", tags=["재고"])
 
 
-@router.get("/", response_model=List[StockResponse])
-def get_all_stock(db: Session = Depends(get_db)):
-    return db.query(ZipperStock).all()
+@router.get("/", response_model=list[StockOut])
+def get_stock(db: Session = Depends(get_db)):
+    return db.query(ZipperStock).order_by(ZipperStock.id).all()
 
 
-@router.get("/{item_id}", response_model=StockResponse)
-def get_stock(item_id: int, db: Session = Depends(get_db)):
-    item = db.query(ZipperStock).filter(ZipperStock.id == item_id).first()
-    if not item:
-        raise HTTPException(status_code=404, detail="재고 항목을 찾을 수 없습니다")
-    return item
-
-
-@router.put("/{item_id}", response_model=StockResponse)
-def update_stock(item_id: int, body: StockUpdate, db: Session = Depends(get_db)):
-    item = db.query(ZipperStock).filter(ZipperStock.id == item_id).first()
-    if not item:
-        raise HTTPException(status_code=404, detail="재고 항목을 찾을 수 없습니다")
-    item.stock_qty = body.stock_qty
+@router.delete("/bulk")
+def delete_stock_bulk(ids: list[int], db: Session = Depends(get_db)):
+    rows = db.query(ZipperStock).filter(ZipperStock.id.in_(ids)).all()
+    if not rows:
+        raise HTTPException(status_code=404, detail="삭제할 항목이 없습니다")
+    for row in rows:
+        db.delete(row)
     db.commit()
-    db.refresh(item)
-    return item
-
-
-# ── 원자재 재고 ───────────────────────────────────────
-@router.get("/raw/", response_model=List[RawMaterialResponse])
-def get_raw_materials(db: Session = Depends(get_db)):
-    return db.query(RawMaterialStock).all()
-
-
-@router.put("/raw/{item_id}", response_model=RawMaterialResponse)
-def update_raw_material(item_id: int, body: RawMaterialUpdate, db: Session = Depends(get_db)):
-    item = db.query(RawMaterialStock).filter(RawMaterialStock.id == item_id).first()
-    if not item:
-        raise HTTPException(status_code=404, detail="원자재 항목을 찾을 수 없습니다")
-    item.stock_qty = body.stock_qty
-    db.commit()
-    db.refresh(item)
-    return item
+    return {"deleted": len(rows)}

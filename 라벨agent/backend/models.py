@@ -30,9 +30,11 @@ class LabelRelease(Base):
     __tablename__ = "label_release"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    label_code = Column(String(9), nullable=False)   # 라벨코드 9자리 (핵심 키)
+    label_code = Column(String(9), nullable=False)
     release_qty = Column(Integer, nullable=False)
     due_date = Column(Date, nullable=False)
-    status = Column(String(20), nullable=False, default="생산중")  # 생산중/출고완료
+    status = Column(String(20), nullable=False, default="생산중")
     release_date = Column(Date, nullable=True)
+    started_at = Column(DateTime, nullable=True)    # 생산 시작 시간
+    finished_at = Column(DateTime, nullable=True)   # 생산 완료 시간
     created_at = Column(DateTime, server_default=func.now())

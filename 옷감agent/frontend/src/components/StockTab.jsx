@@ -8,19 +8,32 @@ const FABRIC_CODES = ['C', 'P', 'L', 'W', 'M'];
 const COLOR_CODES  = ['BK', 'WH', 'NV', 'GY', 'BE', 'RD'];
 
 export default function StockTab({ onRefreshAgent }) {
-  const [stocks, setStocks] = useState([]);
+  const [stocks,  setStocks]  = useState([]);
+  const [checked, setChecked] = useState(new Set());
+  const [loading, setLoading] = useState(true);
   const [form, setForm] = useState({ fabric_code: 'C', color_code: 'BK', stock_qty: '' });
-  const [editId, setEditId] = useState(null);
+  const [showForm, setShowForm] = useState(false);
+  const [editId,  setEditId]  = useState(null);
   const [editQty, setEditQty] = useState('');
 
   const load = async () => {
     try {
       const res = await stockApi.getAll();
       setStocks(res.data);
-    } catch {}
+    } finally { setLoading(false); }
   };
 
   useEffect(() => { load(); }, []);
+
+  const toggleOne = (id) => setChecked(prev => {
+    const next = new Set(prev);
+    next.has(id) ? next.delete(id) : next.add(id);
+    return next;
+  });
+  const toggleAll = () => {
+    if (checked.size === stocks.length) setChecked(new Set());
+    else setChecked(new Set(stocks.map(s => s.id)));
+  };
 
   const handleAdd = async (e) => {
     e.preventDefault();
@@ -28,120 +41,142 @@ export default function StockTab({ onRefreshAgent }) {
     try {
       await stockApi.create({ ...form, stock_qty: parseFloat(form.stock_qty) });
       setForm({ fabric_code: 'C', color_code: 'BK', stock_qty: '' });
+      setShowForm(false);
       await load();
       onRefreshAgent();
-    } catch (err) {
-      alert(err.response?.data?.detail || '등록 실패');
-    }
+    } catch (err) { alert(err.response?.data?.detail || '등록 실패'); }
   };
 
   const handleEdit = async (id) => {
     if (!editQty) return;
     try {
       await stockApi.update(id, { stock_qty: parseFloat(editQty) });
-      setEditId(null);
-      setEditQty('');
-      await load();
-      onRefreshAgent();
-    } catch (err) {
-      alert(err.response?.data?.detail || '수정 실패');
-    }
+      setEditId(null); setEditQty('');
+      await load(); onRefreshAgent();
+    } catch (err) { alert(err.response?.data?.detail || '수정 실패'); }
   };
 
-  const stockStatus = (item) => {
-    const safe = SAFE_STOCK[item.fabric_code] || 0;
-    const qty = parseFloat(item.stock_qty);
-    if (qty === 0) return 'danger';
-    if (qty <= safe) return 'warning';
+  const statusOf = (s) => {
+    const qty = parseFloat(s.stock_qty);
+    const safe = SAFE_STOCK[s.fabric_code] || 0;
+    if (qty === 0) return 'critical';
+    if (qty <= safe) return 'low';
     return 'ok';
   };
 
   return (
     <div>
-      <div className="section-title">재고 현황</div>
-
-      <div className="table-wrap" style={{ marginBottom: 24 }}>
-        <table>
-          <thead>
-            <tr>
-              <th>원단</th>
-              <th>컬러</th>
-              <th>현재 재고 (야드)</th>
-              <th>안전재고 (야드)</th>
-              <th>상태</th>
-              <th>최종 업데이트</th>
-              <th>수정</th>
-            </tr>
-          </thead>
-          <tbody>
-            {stocks.length === 0 ? (
-              <tr><td colSpan={7} style={{ textAlign: 'center', color: '#9ca3af' }}>재고 데이터 없음</td></tr>
-            ) : stocks.map((s) => {
-              const st = stockStatus(s);
-              return (
-                <tr key={s.id}>
-                  <td>{FABRIC_NAMES[s.fabric_code] || s.fabric_code}</td>
-                  <td>{COLOR_NAMES[s.color_code] || s.color_code} ({s.color_code})</td>
-                  <td style={{ fontWeight: 700 }}>{parseFloat(s.stock_qty).toLocaleString()}</td>
-                  <td style={{ color: '#6b7280' }}>{SAFE_STOCK[s.fabric_code] || '-'}</td>
-                  <td>
-                    {st === 'ok'      && <span className="badge badge-ok">정상</span>}
-                    {st === 'warning' && <span className="badge badge-warning">부족</span>}
-                    {st === 'danger'  && <span className="badge badge-danger">긴급</span>}
-                  </td>
-                  <td style={{ fontSize: 11, color: '#9ca3af' }}>
-                    {s.updated_at ? s.updated_at.replace('T', ' ').slice(0, 16) : '-'}
-                  </td>
-                  <td>
-                    {editId === s.id ? (
-                      <span style={{ display: 'flex', gap: 4 }}>
-                        <input
-                          type="number"
-                          value={editQty}
-                          onChange={e => setEditQty(e.target.value)}
-                          style={{ width: 80, padding: '4px 6px', border: '1px solid #d1d5db', borderRadius: 4 }}
-                        />
-                        <button className="btn btn-success" style={{ padding: '4px 10px' }} onClick={() => handleEdit(s.id)}>저장</button>
-                        <button className="btn btn-secondary" style={{ padding: '4px 10px' }} onClick={() => setEditId(null)}>취소</button>
-                      </span>
-                    ) : (
-                      <button className="btn btn-primary" style={{ padding: '4px 10px' }}
-                        onClick={() => { setEditId(s.id); setEditQty(String(parseFloat(s.stock_qty))); }}>
-                        수정
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+        <h3 style={{ fontSize: 15, fontWeight: 700 }}>원자재 재고 현황</h3>
+        <button className="btn btn-primary" style={{ padding: '5px 14px' }}
+          onClick={() => setShowForm(v => !v)}>
+          {showForm ? '닫기' : '+ 재고 추가'}
+        </button>
       </div>
 
-      <div className="section-title">재고 항목 추가</div>
-      <form className="form-row" onSubmit={handleAdd}>
-        <div className="form-group">
-          <label>원단코드</label>
-          <select value={form.fabric_code} onChange={e => setForm(f => ({ ...f, fabric_code: e.target.value }))}>
-            {FABRIC_CODES.map(c => <option key={c} value={c}>{c} - {FABRIC_NAMES[c]}</option>)}
-          </select>
+      {showForm && (
+        <form className="form-row" onSubmit={handleAdd}
+          style={{ background: '#f8faff', border: '1px solid #dbeafe', borderRadius: 8, padding: 12, marginBottom: 12 }}>
+          <div className="form-group">
+            <label>원단코드</label>
+            <select value={form.fabric_code} onChange={e => setForm(f => ({ ...f, fabric_code: e.target.value }))}>
+              {FABRIC_CODES.map(c => <option key={c} value={c}>{c} — {FABRIC_NAMES[c]}</option>)}
+            </select>
+          </div>
+          <div className="form-group">
+            <label>컬러코드</label>
+            <select value={form.color_code} onChange={e => setForm(f => ({ ...f, color_code: e.target.value }))}>
+              {COLOR_CODES.map(c => <option key={c} value={c}>{c} — {COLOR_NAMES[c]}</option>)}
+            </select>
+          </div>
+          <div className="form-group">
+            <label>수량 (야드)</label>
+            <input type="number" placeholder="예: 1000" value={form.stock_qty}
+              onChange={e => setForm(f => ({ ...f, stock_qty: e.target.value }))} style={{ width: 120 }} />
+          </div>
+          <div className="form-group">
+            <label>&nbsp;</label>
+            <button type="submit" className="btn btn-success">추가</button>
+          </div>
+        </form>
+      )}
+
+      {loading ? (
+        <p style={{ fontSize: 13, color: '#9ca3af' }}>불러오는 중...</p>
+      ) : (
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th style={{ width: 40 }}>
+                  <input type="checkbox"
+                    checked={stocks.length > 0 && checked.size === stocks.length}
+                    onChange={toggleAll} style={{ cursor: 'pointer' }} />
+                </th>
+                <th>원자재명</th>
+                <th>단위</th>
+                <th>현재 재고</th>
+                <th>안전재고</th>
+                <th>상태</th>
+                <th>최종 업데이트</th>
+              </tr>
+            </thead>
+            <tbody>
+              {stocks.length === 0 && (
+                <tr><td colSpan={7} style={{ textAlign: 'center', color: '#9ca3af' }}>재고 데이터 없음</td></tr>
+              )}
+              {stocks.map(s => {
+                const st   = statusOf(s);
+                const safe = SAFE_STOCK[s.fabric_code] || 0;
+                const qty  = parseFloat(s.stock_qty);
+                const name = `${FABRIC_NAMES[s.fabric_code] || s.fabric_code} / ${COLOR_NAMES[s.color_code] || s.color_code}`;
+                return (
+                  <tr key={s.id} onClick={() => toggleOne(s.id)}
+                    style={{ cursor: 'pointer', background: checked.has(s.id) ? '#fff1f2' : '' }}>
+                    <td style={{ textAlign: 'center' }}>
+                      <input type="checkbox" checked={checked.has(s.id)}
+                        onChange={() => toggleOne(s.id)}
+                        onClick={e => e.stopPropagation()} style={{ cursor: 'pointer' }} />
+                    </td>
+                    <td style={{ fontWeight: 600 }}>{name}</td>
+                    <td style={{ color: '#6b7280' }}>야드</td>
+                    <td>
+                      {editId === s.id ? (
+                        <span style={{ display: 'flex', gap: 4 }} onClick={e => e.stopPropagation()}>
+                          <input type="number" value={editQty} onChange={e => setEditQty(e.target.value)}
+                            style={{ width: 80, padding: '3px 6px', border: '1px solid #2563eb', borderRadius: 4 }} />
+                          <button className="btn btn-success" style={{ padding: '3px 8px' }} onClick={() => handleEdit(s.id)}>저장</button>
+                          <button className="btn btn-secondary" style={{ padding: '3px 8px' }} onClick={() => setEditId(null)}>취소</button>
+                        </span>
+                      ) : (
+                        <span
+                          style={{ fontWeight: 700, color: st !== 'ok' ? '#dc2626' : '#111827', cursor: 'text', textDecoration: 'underline dotted' }}
+                          onClick={e => { e.stopPropagation(); setEditId(s.id); setEditQty(String(qty)); }}>
+                          {qty.toLocaleString()} 야드
+                        </span>
+                      )}
+                    </td>
+                    <td style={{ color: '#6b7280', fontSize: 12 }}>{safe ? `${safe} 야드` : '-'}</td>
+                    <td style={{ fontSize: 12 }}>
+                      {st === 'ok'       && <span style={{ color: '#16a34a' }}>✅ 정상</span>}
+                      {st === 'low'      && <span style={{ color: '#b45309', fontWeight: 600 }}>⚠ 발주 권고</span>}
+                      {st === 'critical' && <span style={{ color: '#dc2626', fontWeight: 700 }}>❌ 긴급 발주</span>}
+                    </td>
+                    <td style={{ fontSize: 11, color: '#9ca3af' }}>
+                      {s.updated_at ? new Date(s.updated_at).toLocaleString('ko-KR') : '-'}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
-        <div className="form-group">
-          <label>컬러코드</label>
-          <select value={form.color_code} onChange={e => setForm(f => ({ ...f, color_code: e.target.value }))}>
-            {COLOR_CODES.map(c => <option key={c} value={c}>{c} - {COLOR_NAMES[c]}</option>)}
-          </select>
-        </div>
-        <div className="form-group">
-          <label>수량 (야드)</label>
-          <input type="number" placeholder="예: 1000" value={form.stock_qty}
-            onChange={e => setForm(f => ({ ...f, stock_qty: e.target.value }))} style={{ width: 120 }} />
-        </div>
-        <div className="form-group">
-          <label>&nbsp;</label>
-          <button type="submit" className="btn btn-primary">추가</button>
-        </div>
-      </form>
+      )}
+
+      {/* 안전재고 기준 안내 */}
+      <div className="safe-stock-info">
+        안전재고 기준: 면 500야드 / 폴리에스터 300야드 / 린넨 200야드 / 울 150야드 / 혼방 250야드 이하 시 AI Agent 발주 권고
+      </div>
     </div>
   );
 }

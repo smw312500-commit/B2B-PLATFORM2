@@ -1,26 +1,24 @@
 {
   "name": "zipper-agent-frontend",
-  "version": "1.0.0",
   "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
   "dependencies": {
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "react-scripts": "5.0.1",
-    "axios": "^1.6.8",
-    "react-router-dom": "^6.22.3"
+    "axios": "^1.7.2",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
-    "tailwindcss": "^3.4.3",
+    "@vitejs/plugin-react": "^4.3.1",
     "autoprefixer": "^10.4.19",
-    "postcss": "^8.4.38"
-  },
-  "scripts": {
-    "start": "react-scripts start",
-    "build": "react-scripts build"
-  },
-  "browserslist": {
-    "production": [">0.2%", "not dead", "not op_mini all"],
-    "development": ["last 1 chrome version"]
-  },
-  "proxy": "http://localhost:8002"
+    "postcss": "^8.4.38",
+    "tailwindcss": "^3.4.4",
+    "vite": "^5.2.13"
+  }
 }

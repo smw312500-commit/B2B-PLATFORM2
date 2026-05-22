@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
-import { getStock, updateStock } from '../../services/api'
+import { getStock, deleteStockBulk } from '../../services/api'
 
-export default function StockTab() {
-  const [stocks, setStocks] = useState([])
-  const [editing, setEditing] = useState({})
-  const [loading, setLoading] = useState(true)
+export default function StockTab({ searched }) {
+  const [stocks, setStocks]     = useState([])
+  const [checked, setChecked]   = useState(new Set())
+  const [deleting, setDeleting] = useState(false)
+  const [loading, setLoading]   = useState(true)
 
   const fetchStock = async () => {
     try {
@@ -17,20 +18,45 @@ export default function StockTab() {
 
   useEffect(() => { fetchStock() }, [])
 
-  const handleEdit = (id, val) => setEditing((p) => ({ ...p, [id]: val }))
-
-  const handleSave = async (id) => {
-    await updateStock(id, editing[id])
-    setEditing((p) => { const n = { ...p }; delete n[id]; return n })
-    fetchStock()
+  const toggleOne = (id) => {
+    setChecked((prev) => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
   }
 
-  const updatedAt = (s) =>
-    s.updated_at ? new Date(s.updated_at).toLocaleString('ko-KR') : '-'
+  const toggleAll = () => {
+    if (checked.size === stocks.length) setChecked(new Set())
+    else setChecked(new Set(stocks.map((s) => s.id)))
+  }
+
+  const handleDelete = async () => {
+    if (checked.size === 0) return
+    if (!confirm(`선택한 ${checked.size}건을 삭제하시겠습니까?`)) return
+    setDeleting(true)
+    try {
+      await deleteStockBulk([...checked])
+      setChecked(new Set())
+      fetchStock()
+    } catch (err) {
+      alert(err.response?.data?.detail || '삭제 실패')
+    } finally {
+      setDeleting(false)
+    }
+  }
 
   return (
     <div>
-      <h3 className="text-base font-semibold mb-4">재고 현황</h3>
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-base font-semibold">재고 현황</h3>
+        {checked.size > 0 && (
+          <button onClick={handleDelete} disabled={deleting}
+            className="text-sm bg-red-500 text-white px-4 py-1.5 rounded hover:bg-red-600 disabled:opacity-50">
+            {deleting ? '삭제 중...' : `선택 삭제 (${checked.size}건)`}
+          </button>
+        )}
+      </div>
 
       {loading ? (
         <p className="text-sm text-gray-400">불러오는 중...</p>
@@ -39,42 +65,39 @@ export default function StockTab() {
           <table className="w-full text-sm border-collapse">
             <thead>
               <tr className="bg-gray-100 text-gray-600 text-left">
+                <th className="px-3 py-2 border w-10">
+                  <input type="checkbox"
+                    checked={stocks.length > 0 && checked.size === stocks.length}
+                    onChange={toggleAll}
+                    className="cursor-pointer" />
+                </th>
                 <th className="px-4 py-2 border">품목명</th>
                 <th className="px-4 py-2 border">단위</th>
                 <th className="px-4 py-2 border">현재 재고</th>
                 <th className="px-4 py-2 border">최종 업데이트</th>
-                <th className="px-4 py-2 border">수정</th>
               </tr>
             </thead>
             <tbody>
+              {stocks.length === 0 && (
+                <tr><td colSpan={5} className="px-4 py-4 text-center text-gray-400">재고 데이터 없음</td></tr>
+              )}
               {stocks.map((s) => (
-                <tr key={s.id} className="hover:bg-gray-50">
+                <tr key={s.id}
+                  onClick={() => toggleOne(s.id)}
+                  className={`cursor-pointer hover:bg-gray-50 ${checked.has(s.id) ? 'bg-red-50' : ''}`}>
+                  <td className="px-3 py-2 border text-center">
+                    <input type="checkbox" checked={checked.has(s.id)} onChange={() => toggleOne(s.id)}
+                      onClick={(e) => e.stopPropagation()} className="cursor-pointer" />
+                  </td>
                   <td className="px-4 py-2 border font-medium">{s.material_name}</td>
                   <td className="px-4 py-2 border text-gray-500">{s.unit}</td>
                   <td className="px-4 py-2 border">
-                    {editing[s.id] !== undefined ? (
-                      <input
-                        type="number"
-                        value={editing[s.id]}
-                        onChange={(e) => handleEdit(s.id, e.target.value)}
-                        className="border rounded px-2 py-1 w-28 text-sm"
-                      />
-                    ) : (
-                      <span className={`font-semibold ${s.stock_qty <= (s.material_name === '라벨원단' ? 500 : 5) ? 'text-red-600' : 'text-gray-800'}`}>
-                        {Number(s.stock_qty).toLocaleString()} {s.unit}
-                      </span>
-                    )}
+                    <span className={`font-semibold ${Number(s.stock_qty) <= (s.material_name === '라벨원단' ? 500 : 5) ? 'text-red-600' : 'text-gray-800'}`}>
+                      {Number(s.stock_qty).toLocaleString()} {s.unit}
+                    </span>
                   </td>
-                  <td className="px-4 py-2 border text-gray-400 text-xs">{updatedAt(s)}</td>
-                  <td className="px-4 py-2 border">
-                    {editing[s.id] !== undefined ? (
-                      <div className="flex gap-2">
-                        <button onClick={() => handleSave(s.id)} className="text-xs bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700">저장</button>
-                        <button onClick={() => setEditing((p) => { const n = { ...p }; delete n[s.id]; return n })} className="text-xs text-gray-500 hover:underline">취소</button>
-                      </div>
-                    ) : (
-                      <button onClick={() => handleEdit(s.id, s.stock_qty)} className="text-xs text-blue-600 hover:underline">수정</button>
-                    )}
+                  <td className="px-4 py-2 border text-gray-400 text-xs">
+                    {s.updated_at ? new Date(s.updated_at).toLocaleString('ko-KR') : '-'}
                   </td>
                 </tr>
               ))}

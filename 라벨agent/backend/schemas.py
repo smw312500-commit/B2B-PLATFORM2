@@ -53,11 +53,17 @@ class LabelReleaseCreate(BaseModel):
             raise ValueError(msg)
         return v
 
+class LabelReleaseComplete(BaseModel):
+    started_at:  Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+
 class LabelReleaseOut(LabelReleaseCreate):
     id: int
     status: str
     release_date: Optional[date]
-    created_at: Optional[datetime]
+    started_at:   Optional[datetime]
+    finished_at:  Optional[datetime]
+    created_at:   Optional[datetime]
 
     class Config:
         from_attributes = True

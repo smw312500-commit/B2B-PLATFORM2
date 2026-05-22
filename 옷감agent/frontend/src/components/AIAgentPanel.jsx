@@ -2,67 +2,76 @@ import React from 'react';
 import './AIAgentPanel.css';
 
 const FABRIC_NAMES = { C: '면', P: '폴리에스터', L: '린넨', W: '울', M: '혼방' };
+const SAFE_STOCK   = { C: 500, P: 300, L: 200, W: 150, M: 250 };
 
 export default function AIAgentPanel({ status, onRefresh }) {
   return (
     <div className="agent-panel">
-      <div className="agent-panel-header">
-        <span>AI Agent</span>
-        <button className="agent-refresh-btn" onClick={onRefresh} title="새로고침">↻</button>
-      </div>
+      <h2 className="agent-title">AI Agent</h2>
 
+      {/* 원자재 재고 */}
       <div className="agent-section">
-        <div className="agent-section-title">납기 현황</div>
-        {!status || status.orders.length === 0 ? (
-          <div className="agent-empty">진행 중인 주문 없음</div>
+        <p className="agent-section-label">원자재 재고</p>
+        {!status ? (
+          <p className="agent-empty">불러오는 중...</p>
+        ) : status.stocks?.length === 0 ? (
+          <p className="agent-empty">재고 데이터 없음</p>
         ) : (
-          status.orders.map((o) => (
-            <div key={o.release_id} className={`agent-order-item ${o.status_flag.toLowerCase()}`}>
-              <div className="agent-order-code">{o.label_code}</div>
-              <div className="agent-order-detail">
-                {FABRIC_NAMES[o.fabric_code] || o.fabric_code} / {o.color_code}
-                &nbsp;·&nbsp;{o.release_qty.toLocaleString()}야드
-              </div>
-              <div className="agent-order-meta">
-                <span className={`flag-badge ${o.status_flag.toLowerCase()}`}>
-                  {o.status_flag === 'OK' ? '✅ 가능' : o.status_flag === 'WARNING' ? '⚠ 위험' : '❌ 불가'}
-                </span>
-                <span className="d-day">D-{o.days_left}</span>
-              </div>
-              <div className="agent-order-msg">{o.message}</div>
-            </div>
-          ))
+          <div className="stock-list">
+            {status.stocks?.map(s => {
+              const safe = SAFE_STOCK[s.fabric_code] || 0;
+              const warn = s.stock_qty <= safe;
+              return (
+                <div key={`${s.fabric_code}_${s.color_code}`}
+                  className={`stock-badge ${warn ? 'warn' : ''}`}>
+                  <span className={warn ? 'stock-name warn' : 'stock-name'}>{s.material_name}</span>
+                  <span className={warn ? 'stock-qty warn' : 'stock-qty'}>
+                    {s.stock_qty.toLocaleString()} {s.unit}{warn ? ' ⚠' : ''}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
         )}
       </div>
 
+      {/* 납기 현황 */}
       <div className="agent-section">
-        <div className="agent-section-title">AI 지시사항</div>
-        {!status || status.instructions.length === 0 ? (
-          <div className="agent-empty">—</div>
+        <p className="agent-section-label">납기 현황</p>
+        {!status || status.active_orders?.length === 0 ? (
+          <p className="agent-empty">진행 중인 주문 없음</p>
         ) : (
-          <ul className="agent-instructions">
-            {status.instructions.map((inst, i) => (
-              <li key={i}>{inst}</li>
-            ))}
-          </ul>
+          status.active_orders.map(o => {
+            const urgent = o.days_remaining < 2;
+            const warn   = o.days_remaining < 5;
+            return (
+              <div key={o.id} className={`order-badge ${urgent ? 'urgent' : warn ? 'warn' : ''}`}>
+                <div className="order-badge-top">
+                  <span className="order-item-name">{o.item_name}</span>
+                  <span className={`d-badge ${urgent ? 'urgent' : warn ? 'warn' : ''}`}>D-{o.days_remaining}</span>
+                </div>
+                <div className="order-badge-sub">
+                  {o.release_qty.toLocaleString()}야드 · 납기 {o.due_date}
+                </div>
+              </div>
+            );
+          })
         )}
       </div>
 
-      {status && status.stock_warnings.length > 0 && (
+      {/* AI 지시사항 */}
+      {status?.stock_warnings?.length > 0 && (
         <div className="agent-section">
-          <div className="agent-section-title">재고 경고</div>
-          {status.stock_warnings.map((w, i) => (
-            <div key={i} className={`agent-stock-warn ${w.is_critical ? 'danger' : 'warning'}`}>
-              <span>{FABRIC_NAMES[w.fabric_code] || w.fabric_code}_{w.color_code}</span>
-              <span>{w.stock_qty.toLocaleString()}야드</span>
-              {w.is_critical
-                ? <span className="warn-label">❌ 긴급</span>
-                : <span className="warn-label">⚠ 부족</span>
-              }
-            </div>
-          ))}
+          <p className="agent-section-label">AI 지시사항</p>
+          <div className="instructions-list">
+            {status.stock_warnings.map((w, i) => (
+              <p key={i} className="instruction-item">{w}</p>
+            ))}
+          </div>
         </div>
       )}
+
+      <button onClick={onRefresh} className="refresh-btn">새로고침</button>
     </div>
   );
 }
