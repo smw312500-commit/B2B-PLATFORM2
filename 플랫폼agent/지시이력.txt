@@ -1,0 +1,232 @@
+========================================
+플랫폼agent 세션 지시 이력
+========================================
+형식: [YYYY-MM-DD HH:MM] 지시 내용 / 결과
+
+----------------------------------------
+[2026-05-28] 초기 구현 세션
+----------------------------------------
+지시: 플랫폼 중앙 시스템 전체 구축
+  - 세션_지시문.txt 기반으로 구현
+결과:
+  - backend/ FastAPI (포트 8000) 구현 완료
+    · database.py, models.py, schemas.py
+    · routers/collected.py  — 생산사 출고완료 신호 수신 + 3사 완료 체크
+    · routers/dispatch.py   — 배차 목록 조회 + 물류 완료 수신
+    · routers/dashboard.py  — 대시보드 통계 요약
+    · routers/insights.py   — AI 인사이트 생성 (GPT API)
+    · routers/labelcode.py  — 라벨코드 기준 3사 현황 조회
+    · services/dispatch_auto.py — 3사 완료 감지 → dispatch 자동 생성
+    · services/ai_insight.py    — GPT 인사이트 생성 로직
+  - frontend/ React + Vite + Tailwind
+    · 탭 4개: 대시보드 / 라벨코드 추적 / 배차 현황 / AI 인사이트
+    · 우측 고정 SidePanel (최근 인사이트 + 배차대기 건수)
+
+----------------------------------------
+[2026-05-30] 연결 보완 필요 사항
+----------------------------------------
+지시: dispatch_auto.py에 물류agent 신호 전송 추가
+  - 현재: 3사 완료 감지 → dispatch 테이블 생성 후 끝
+  - 추가할 것: dispatch 생성 직후 물류agent POST 전송
+    POST http://localhost:8004/api/platform/signal
+    body: company_id, company_name, destination, due_date, pickup_date
+  - .env.example에 LOGISTICS_API_URL=http://localhost:8004 추가
+결과: [2026-05-31] 완료
+  - services/dispatch_auto.py — _notify_logistics() 함수 추가
+  - .env.example, .env — LOGISTICS_API_URL=http://localhost:8004 추가
+
+----------------------------------------
+[2026-05-31] 멀티 에이전트 보고 구조 구현 예정
+----------------------------------------
+지시: 각사 AI → 플랫폼 AI 보고 구조 추가
+
+각사 AI가 플랫폼으로 보내야 할 데이터:
+
+  생산 스케줄 보고 (POST /api/agent-report/schedule):
+  {
+    "company_id": 3,
+    "company_name": "지퍼단추사",
+    "item": "WOOD_BR",
+    "qty": 1000,
+    "start_at": "2026-05-01 09:00",
+    "estimated_completion": "2026-05-02 14:00",
+    "status": "진행중"   ← 재조정 시 "재조정"으로 변경
+  }
+
+  돌발상황 재조정 보고 (POST /api/agent-report/reschedule):
+  {
+    "company_id": 3,
+    "reason": "기계고장",
+    "new_estimated_completion": "2026-05-03 10:00"
+  }
+
+  BL 입고 보고 (POST /api/agent-report/import):
+  {
+    "company_id": 3,
+    "material": "원목",
+    "qty": 800,
+    "arrival_date": "2026-05-05",
+    "bl_number": "SINOTRANS-2026-ZP001"
+  }
+
+플랫폼 AI가 하는 일:
+  - 각사 보고서 수신 (raw DB 아닌 AI 판단 결과)
+  - 수출 완료 시각 + 수입 입고 시각 종합
+  - 이동시간 매트릭스 적용 → 물류 기사 출발 시각 계산
+  - 물류에 지시 (POST http://localhost:8004/api/platform/signal)
+
+결과: [2026-06-02] 완료
+  - models.py — AgentReport 테이블 추가
+  - routers/agent_report.py — 엔드포인트 3개 구현
+    · POST /api/agent-report/schedule    생산 스케줄 보고 수신 + 물류 사전 신호
+    · POST /api/agent-report/reschedule  재조정 보고 수신 + 물류 변경 신호
+    · POST /api/agent-report/import      BL 입고 보고 수신
+  - main.py — agent_report 라우터 등록
+
+----------------------------------------
+[2026-06-04 13:53] Agent 간 1:1 보고 채널 UI 추가
+----------------------------------------
+지시: 플랫폼agent에 각 agent와 API 보고 이벤트를 채팅처럼 확인하는 1:1 보고 채널을 만들 것
+
+  목적:
+    생산사/물류사가 자기 DB를 플랫폼에 넘기는 방식이 아니라,
+    각 agent가 자기 상황을 판단한 결과만 플랫폼에 보고하는 구조를 화면에서 확인 가능하게 만든다.
+
+  중요한 원칙:
+    - 자유채팅 기능이 아니다.
+    - 실제 업무 처리는 기존 API JSON 보고로 한다.
+    - 채팅 UI는 API 보고 이벤트를 말풍선/타임라인처럼 보여주는 화면이다.
+    - 채팅 텍스트를 파싱해서 비즈니스 로직을 돌리면 안 된다.
+
+  플랫폼 채널 구조:
+    단체 채팅처럼 만들지 말 것.
+    아래 4개 1:1 채널을 분리해서 보여줄 것.
+      - 플랫폼 - 라벨
+      - 플랫폼 - 물류
+      - 플랫폼 - 지퍼단추
+      - 플랫폼 - 옷감
+
+  기록 대상 이벤트:
+    - 라벨/옷감/지퍼단추 -> 플랫폼
+      · /api/agent-report/schedule
+      · /api/agent-report/reschedule
+      · /api/agent-report/import
+      · /api/collected-release
+    - 플랫폼 -> 물류
+      · /api/platform/signal 전송
+      · 배차 요청
+      · 픽업 필요 보고
+      · 납기 위험 화물 알림
+      · 귀로배정 후보 알림
+    - 물류 -> 플랫폼
+      · 배차 확정 정보
+      · 배송 완료 신호
+      · 왕복/귀로배정 결과
+
+  권장 데이터 구조:
+    report_message 또는 agent_message 테이블/모델을 추가해도 됨.
+    필드 예시:
+      - id
+      - channel: label / logistics / zipper / fabric
+      - direction: inbound / outbound
+      - source_agent
+      - target_agent
+      - event_type
+      - related_code
+      - title
+      - summary
+      - payload_json
+      - status
+      - created_at
+
+  백엔드 작업:
+    - 기존 agent_report 수신 시 report_message에도 기록
+    - collected_release 수신 시 해당 생산사 채널에 기록
+    - 물류agent로 signal 전송 시 플랫폼-물류 채널에 outbound 기록
+    - 물류agent 완료/상태 수신 시 플랫폼-물류 채널에 inbound 기록
+    - 조회 API 추가
+      예:
+        GET /api/report-channels
+        GET /api/report-channels/{channel}/messages
+
+  프론트 작업:
+    - 플랫폼 UI에 "Agent 보고 채널" 또는 "보고 채널" 탭 추가
+    - 4개 채널을 분리해서 표시
+    - 단톡방 느낌이 아니라 플랫폼과 각 agent 간 1:1 업무 보고 화면처럼 구성
+
+  주의:
+    - 이 기능은 오케스트레이션 과정을 보여주기 위한 핵심 포트폴리오 UI다.
+    - 구현 후 결과에 수정 파일, 추가 API, 추가 테이블 여부를 기록할 것.
+
+결과: [2026-06-04] 완료
+  - backend/models.py
+    · report_message 테이블 추가
+      - channel, direction, source_agent, target_agent, event_type
+      - related_code, title, summary, payload_json, status, created_at
+  - backend/services/report_message.py
+    · 채널 매핑(label/logistics/zipper/fabric) 및 메시지 기록 공통 서비스 추가
+  - backend/routers/report_channels.py
+    · GET /api/report-channels
+    · GET /api/report-channels/{channel}/messages
+  - backend/main.py
+    · report_channels 라우터 등록
+  - backend/routers/agent_report.py
+    · schedule / reschedule / import 수신 시 report_message 기록 추가
+    · 플랫폼 → 물류 signal 전송 시 플랫폼-물류 채널 outbound 기록 추가
+  - backend/routers/collected.py
+    · /api/collected-release 수신 시 생산사별 채널 inbound 기록 추가
+  - backend/services/dispatch_auto.py
+    · 자동 배차 후 물류 signal 전송 시 "배차 요청" outbound 기록 추가
+  - backend/routers/dispatch.py
+    · 물류 완료/상태 수신 시 플랫폼-물류 채널 inbound 기록 추가
+  - frontend/src/api.js
+    · 보고 채널 조회 API 함수 추가
+  - frontend/src/App.jsx
+    · "보고 채널" 탭 추가
+  - frontend/src/components/tabs/ReportChannelsTab.jsx
+    · 4개 1:1 채널(플랫폼-라벨 / 플랫폼-물류 / 플랫폼-지퍼단추 / 플랫폼-옷감) UI 추가
+    · 채널 목록 + 이벤트 타임라인 + payload 확인 화면 구현
+  - 검증
+    · python -m compileall backend 통과
+    · npm run build 통과
+
+----------------------------------------
+[2026-06-04 15:31] 케어라벨 AI 보고 수신 호환 보강
+----------------------------------------
+지시: 케어라벨 AI agent가 보내는 플랫폼 보고 payload를 그대로 받을 수 있게 수신 API를 보강할 것
+
+  보강 대상:
+    - /api/agent-report/schedule
+    - /api/agent-report/reschedule
+    - /api/agent-report/import
+
+  케어라벨agent 송신 특성:
+    - company_id가 숫자 대신 "케어라벨사" 문자열일 수 있음
+    - company_name이 비어 있을 수 있음
+    - schedule은 estimated_completion 대신 due_date / reported_at 기준만 올 수 있음
+    - import는 qty가 실수일 수 있음
+    - 추가 메타 필드(weight, supplier, note 등)가 같이 올 수 있음
+
+결과: [2026-06-04] 완료
+  - backend/routers/agent_report.py
+    · company_id를 int|string 모두 허용하도록 보강
+    · company_name 누락 시 company_id/회사명 매핑으로 자동 보정
+    · 케어라벨사/라벨사/라벨agent 문자열도 회사 식별 가능하게 처리
+    · schedule 수신 시 estimated_completion이 없어도 due_date / reported_at 기준으로 저장 가능
+    · reschedule 수신 시 label_code 포함 가능하도록 보강
+    · import 수신 시 qty 실수 허용
+    · 물류 신호 전송은 날짜 정보가 있을 때만 수행하도록 안전 처리
+  - backend/services/report_message.py
+    · 케어라벨, 라벨agent 명칭도 label 채널로 인식하도록 채널 매핑 보강
+    · 문자열 company_id("2")도 채널 해석 가능하도록 보강
+  - 검증
+    · python -m compileall backend 통과
+    · 라벨agent 형태 sample payload 모델 파싱 확인
+
+----------------------------------------
+※ 다음 지시 시 아래 형식으로 추가할 것:
+
+[YYYY-MM-DD HH:MM] 지시 제목
+지시: (무엇을 요청했는지)
+결과: (무엇이 구현됐는지)
+========================================
