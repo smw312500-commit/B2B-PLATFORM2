@@ -1,0 +1,1123 @@
+라벨agent 세션 지시 이력
+========================================
+형식: [YYYY-MM-DD HH:MM] 지시 내용 / 결과
+
+----------------------------------------
+[2026-05-21] 초기 구현 세션
+----------------------------------------
+지시: 라벨agent 전체 시스템 구축
+결과:
+  - backend/ FastAPI (포트 8001) 구현 완료
+    · database.py, models.py, schemas.py
+    · routers/stock.py   — 재고 조회/삭제
+    · routers/order.py   — 발주 등록/취소/입고완료
+    · routers/release.py — 출고 등록/완료처리 (재고차감 + 플랫폼전송)
+    · routers/agent.py   — AI 납기분석 + 라벨코드 검증
+    · services/platform_sender.py — 플랫폼 POST 전송
+    · services/label_validator.py — 9자리 라벨코드 유효성 검증
+    · services/ai_agent.py — GPT 납기판정 로직
+  - frontend/ React + Vite + Tailwind 구현 완료
+    · 탭 4개: 재고 / 발주 / 생산 / 완료
+    · AI 납기 분석 패널 (드롭다운)
+    · 우측 고정 AgentPanel
+    · 날짜 범위 필터 + 미니 달력
+
+----------------------------------------
+[2026-05-30] 포트 충돌 수정
+----------------------------------------
+지시: 없음 (타 세션에서 발견 후 수정)
+결과: 해당 없음 (라벨agent 포트 8001 정상)
+
+----------------------------------------
+[2026-05-30] 추가 기능 예정
+----------------------------------------
+지시: 패킹리스트 생성 기능 추가 예정
+  - 완료 탭 출고완료 행에 "패킹리스트" 버튼 추가
+  - GET /releases/{id}/packing-list → PDF 다운로드
+  - reportlab 사용, 영문 수출 패킹리스트 양식
+
+지시: BL 파서 연결 예정
+  - 발주 탭에 "BL 업로드" 버튼 추가
+  - POST http://localhost:8010/parse-bl 호출
+  - 응답으로 발주 입력폼 자동 채움
+
+----------------------------------------
+[2026-05-31] 패킹리스트 PDF + BL 파서 연결
+----------------------------------------
+지시: 지시이력.txt 예정 작업 2건 구현
+결과:
+  - 패킹리스트 PDF 생성
+    · requirements.txt: reportlab, python-multipart 추가
+    · GET /releases/{id}/packing-list → StreamingResponse(PDF)
+    · reportlab로 영문 수출 패킹리스트 생성 (라벨코드 파싱 정보 포함)
+    · 완료 탭 출고완료 이력 테이블에 "📄 패킹리스트" 버튼 추가
+    · api.js: downloadPackingList(id, labelCode) 함수 추가
+  - BL 파서 연결
+    · POST /agent/parse-bl → 포트 8010 parse-bl 서비스로 파일 프록시
+    · agent.py: UploadFile 수신 → httpx로 8010 전달 → JSON 반환
+    · 발주 탭 상단에 "📋 BL 업로드" 버튼 추가 (PDF/이미지)
+    · BL 파싱 결과로 발주 등록 폼 자동 채움
+    · api.js: parseBL(formData) 함수 추가
+  - 엔드포인트 불일치 수정
+    · platform_sender.py 기본값: /api/release → /api/collected-release
+    · .env.example 동일하게 수정
+
+----------------------------------------
+[2026-05-31] 플랫폼 AI 보고 기능 추가
+----------------------------------------
+지시: 각사 AI가 플랫폼에 스케줄 보고하는 구조 추가
+
+  생산 등록 시 → 플랫폼 POST /api/agent-report/schedule
+  돌발상황(기계고장/불량 등) → 플랫폼 POST /api/agent-report/reschedule
+  BL 파싱 후 입고 확정 시 → 플랫폼 POST /api/agent-report/import
+
+  핵심: raw 데이터가 아닌 AI가 판단한 요약 정보만 전송
+  플랫폼 AI는 이 보고서로만 물류 지시 → DB 직접 읽기 없음
+
+결과: 완료
+  - services/platform_reporter.py 신규 생성
+    · report_schedule(item, qty, due_date) — 6대×800장 기준 완료예상 자동 계산
+    · report_reschedule(label_code, reason, new_estimated_completion)
+    · report_import(material, qty, arrival_date, bl_number)
+    · 보고 실패는 사일런트 무시 (플랫폼 장애가 라벨 업무를 막지 않음)
+  - routers/release.py
+    · create_release: BackgroundTasks → report_schedule 비동기 보고
+    · POST /{id}/incident: IncidentReport 수신 → report_reschedule 보고
+  - routers/order.py
+    · receive_order: BackgroundTasks → report_import 비동기 보고
+  - schemas.py: IncidentReport 스키마 추가
+  - frontend/src/services/api.js: reportIncident(id, data) 추가
+  - .env: PLATFORM_BASE_URL, COMPANY_ID 환경변수 지원
+
+----------------------------------------
+[2026-06-02] 패킹리스트 — 건별 → 날짜 범위 방식으로 변경
+----------------------------------------
+지시: 패킹리스트를 건별 생성에서 날짜 범위 기준 일괄 생성으로 변경
+
+  변경 이유:
+    실제 수출 업무는 날짜 기준으로 출고건 묶어서 패킹리스트 1장 발행
+    건별 버튼 방식은 비효율적
+
+  백엔드 변경:
+    - 기존: GET /releases/{id}/packing-list (건별)
+    - 변경: GET /releases/packing-list?from=YYYY-MM-DD&to=YYYY-MM-DD
+    - 해당 기간 status="출고완료" 건 전부 조회
+    - 품목별로 합산하여 PDF 1장 생성
+    - 합산 예시: CARE LABEL W3MJW01NV 5000장 + W1WTC01BK 3000장 → 2행 테이블
+
+  프론트 변경:
+    - 완료 탭 각 행의 "패킹리스트" 버튼 제거
+    - 완료 탭 테이블 바로 위에 "📄 패킹리스트 다운로드" 버튼 배치
+      (날짜 필터 옆 아님 — 테이블 상단 좌측 또는 우측)
+    - 날짜 범위 선택 후 버튼 클릭 → GET 요청 → PDF 다운로드
+    - 날짜 미선택 시 "날짜 범위를 설정하세요" 안내
+
+  수정 파일:
+    - backend/routers/release.py — 기존 /{id}/packing-list 대체 또는 추가
+    - frontend/src/services/api.js — downloadPackingList(from, to) 파라미터 변경
+    - frontend/src/components/tabs/CompleteTab.jsx — 행 버튼 제거 + 테이블 위 버튼 추가
+
+결과: 완료
+  - backend/routers/release.py
+    · 기존 GET /{id}/packing-list 제거
+    · 신규 GET /releases/packing-list?from=&to= 엔드포인트 추가
+    · release_date 기준 출고완료 건 조회 → 라벨코드별 수량 합산 → PDF 1장
+    · PDF 헤더에 Period, Items 수 표시
+  - frontend/src/services/api.js
+    · downloadPackingList(from, to) 로 파라미터 변경
+    · GET /releases/packing-list?from=&to= 쿼리파라미터 방식 호출
+  - frontend/src/components/tabs/CompleteTab.jsx
+    · 각 행의 "📄 패킹리스트" 버튼 제거
+    · "문서" 컬럼 헤더 제거, colSpan 7 복원
+    · 출고완료 이력 테이블 상단 우측에 "📄 패킹리스트 다운로드" 버튼 배치
+    · searched(날짜범위) 없으면 회색 비활성 + alert 안내
+    · searched 있으면 해당 기간으로 즉시 PDF 다운로드
+
+----------------------------------------
+[2026-06-02 13:58] AgentPanel API 자동 호출 제거
+----------------------------------------
+지시: 화면이 켜져 있는 동안 불필요하게 API를 계속 호출하지 않도록 자동 조회를 제거할 것
+결과:
+  - frontend/src/components/AgentPanel.jsx
+    · 30초 간격 GET /agent/status 자동 polling 제거
+    · 최초 진입 시 1회 조회 후, 이후는 수동 "새로고침" 버튼으로만 조회
+    · 패널에 "자동 갱신 없음" 및 마지막 조회 시각 표시 추가
+
+----------------------------------------
+[2026-06-02 13:27] AI Agent 현재상황 판단 고도화
+----------------------------------------
+지시: 우측 AgentPanel을 단순 현황 표시가 아니라 "케어라벨사 생산 판단 AI"로 고도화할 것
+
+  목표:
+    라벨agent AI가 회사 내부 상태를 먼저 판단한다.
+    플랫폼agent는 라벨사 raw DB를 직접 판단하지 않고, 라벨agent가 판단한 요약 보고를 받아 종합한다.
+
+  우선 참고 문서:
+    - 라벨agent/AI_로직.txt
+    - 라벨agent/생산규칙.txt
+    - 라벨agent/라벨코드_규칙.txt
+
+  중요 원칙:
+    위 문서에 이미 정의된 계산식, 안전재고, 생산속도, 라벨코드 규칙을 최대한 그대로 반영할 것.
+    지시문과 기존 로직 문서가 충돌하면 기존 로직 문서를 우선하고, 충돌 내용을 결과에 기록할 것.
+    기존 로직 문서에 없는 판단 기준은 임의로 확정하지 말고 "로직 문서에 없음"이라고 결과에 적을 것.
+    꼭 임시값이 필요하면 코드에 하드코딩하지 말고 TODO 또는 설정값으로 분리하고 결과에 보고할 것.
+
+  AI가 판단해야 할 현재 상황:
+    - 라벨원단/잉크 현재 재고
+    - 안전재고 이하 여부
+    - 진행중 생산 주문 목록
+    - 각 주문의 라벨코드 유효성
+    - 주문량 기준 필요 라벨원단/잉크
+    - 생산속도 기준 완료예정 시각
+    - 납기일까지 완료 가능/위험/불가 여부
+    - 오늘 우선 처리해야 할 작업 순서
+
+  판단 기준:
+    - 생산속도: 기존 생산규칙.txt 기준 사용
+    - 라벨원단 필요량: 주문량 / 25, 올림
+    - 잉크 필요량: 주문량 / 10000, 올림
+    - 납기 가능: 완료예정일 <= 납기일
+    - 납기 위험: 완료예정일이 납기일 전날 또는 당일에 걸침
+    - 납기 불가: 완료예정일 > 납기일
+    - 우선순위: 납기 불가 > 납기 위험 > 납기 가까운 순 > 주문량 적은 순
+
+  백엔드 작업:
+    - backend/services/ai_agent.py 또는 기존 판단 서비스 확장
+    - GET /agent/status 응답을 더 구체화
+      응답에 포함할 것:
+        · stock_summary
+        · active_orders
+        · schedule_recommendations
+        · risk_items
+        · material_shortages
+        · next_actions
+    - 가능하면 규칙 기반 판단을 먼저 구현
+    - GPT API는 선택사항이며, 사용하더라도 규칙 기반 결과를 자연어로 정리하는 용도로만 사용할 것
+
+  프론트 작업:
+    - frontend/src/components/AgentPanel.jsx 고도화
+    - 우측 패널에 아래 섹션 표시
+      · 현재 재고 판단
+      · 납기 위험 주문
+      · 오늘 작업 우선순위
+      · AI 지시사항
+      · 플랫폼 보고 상태
+    - 추상적인 문구보다 실제 데이터 기반 문구를 표시
+      예: "W3MJW01NV 5000장: 라벨원단 200m 필요, 잉크 1통 필요, 납기 D-2, 생산 가능"
+
+  플랫폼 보고:
+    - 생산 등록 시: 기존 /api/agent-report/schedule 유지하되, 완료예정 시각과 판단 상태 포함
+    - 돌발상황 시: /api/agent-report/reschedule 유지
+    - 출고완료 시: 기존 /api/collected-release 유지
+    - 납기 내 완료된 출고완료 물품은 플랫폼이 물류 연결할 수 있도록 label_code, qty, due_date, release_date를 반드시 포함
+
+  주의:
+    - 플랫폼 장애가 라벨 업무를 막으면 안 됨
+    - 보고 실패는 기존처럼 사일런트 무시하되, 가능하면 내부 로그 또는 패널에 "플랫폼 보고 대기" 정도만 표시
+    - 코드 구현 후 이 지시이력의 결과 항목에 수정 파일과 구현 내용을 기록할 것
+
+결과: 완료
+  - backend/services/ai_agent.py
+    · 진행중 생산 주문 전체를 기준으로 재고/원자재/완료예정시각/우선순위/납기상태를 계산하도록 확장
+    · rule_based_status(기존 AI_로직.txt 기준) + schedule_status(완료예정 시각 기준)를 함께 계산하고 더 보수적인 상태를 deadline_status로 채택
+    · active_orders / schedule_recommendations / risk_items / material_shortages / next_actions 생성 로직 추가
+  - backend/services/platform_report_state.py 신규 생성
+    · 최근 플랫폼 보고 전송/완료/대기 상태를 메모리에 기록하여 AgentPanel에서 조회 가능하게 구현
+  - backend/routers/agent.py
+    · GET /agent/status 응답을 stock_summary, active_orders, schedule_recommendations, risk_items, material_shortages, next_actions, platform_report_status 구조로 고도화
+  - backend/routers/release.py
+    · 생산 등록 시 현재 AI 판단 결과의 시작예정/완료예정/판단상태를 /api/agent-report/schedule 보고에 포함
+    · 출고완료 시 플랫폼 collected-release 전송 payload에 due_date 포함
+  - backend/services/platform_reporter.py
+    · schedule/reschedule/import 보고에 reported_at 및 내부 상태 추적 연결
+  - backend/services/platform_sender.py
+    · 출고완료 플랫폼 전송 상태 추적 추가, qty/due_date 포함
+  - backend/schemas.py
+    · AI 분석 응답에 rule_based_status, schedule_status, estimated_completion_at 등 필드 확장
+  - frontend/src/components/AgentPanel.jsx
+    · 우측 패널을 "현재 재고 판단 / 납기 위험 주문 / 오늘 작업 우선순위 / AI 지시사항 / 플랫폼 보고 상태" 섹션으로 재구성
+    · 실제 주문 데이터 기반 요약 문구와 최근 플랫폼 보고 상태 표시
+  - frontend/src/App.jsx
+    · AI 납기 분석 팝업 결과에 완료예정 시각 표시
+  - 충돌/가정 기록
+    · 2026-06-02 지시의 완료예정 시각 기준과 기존 AI_로직.txt/생산규칙.txt의 납기 경계가 일부 달라 기존 문서 기준을 우선하고, 현재상황 판단은 더 보수적인 상태를 채택
+    · 복수 주문 병렬 배치 규칙은 로직 문서에 없어 단일 큐(전체 설비를 한 주문씩 순차 투입) 기준으로 계산하며 logic_notes/TODO로 명시
+
+----------------------------------------
+[2026-06-03 11:48] 기계배정 버튼 추가
+----------------------------------------
+지시: 생산 탭의 "기계 현황" 글자 옆에 기계배정 버튼을 추가할 것
+결과:
+  - frontend/src/components/MachineLayout.jsx
+    · "기계 현황" 옆에 "기계배정" 버튼 추가
+    · 적용 가능한 추천 배정이 없으면 비활성화
+  - frontend/src/components/tabs/ProductionTab.jsx
+    · 현재 AI 추천(machine_recommendations) 중 실제 변경이 필요한 대기중 기계만 추려서 버튼 클릭 시 일괄 배정
+    · 자동 호출 없이 사용자 버튼 클릭 시에만 배정 API 실행 후 1회 재조회
+
+----------------------------------------
+[2026-06-03 11:00] 라벨agent 역할 확정 — BL/가공완료/기계배분
+----------------------------------------
+지시: 라벨agent AI의 역할을 아래 기준으로 확정하고 구현할 것
+
+  확정 사항:
+    - 라벨 인쇄기는 6대 기준으로 통일한다.
+    - 기존 문서/코드에 3대 기준이 남아 있으면 6대 기준으로 정리한다.
+    - 시간당 생산량은 인쇄기 1대당 800장/h 기준을 유지한다.
+    - 총 생산능력은 6대 × 800장/h = 4,800장/h 기준이다.
+    - 일일 가동시간은 09:00~18:00, 9시간 기준이다.
+    - 최대 일일 생산량은 6대 × 9시간 × 800장 = 43,200장/일 기준이다.
+
+  라벨agent AI가 맡을 일:
+    1. BL 등록 관리
+       - 수입품 원자재 입고를 관리한다.
+       - 대상: 라벨원단, 잉크 등
+       - BL 업로드/파싱 결과를 발주 또는 입고 데이터와 연결한다.
+       - 입고 확정 시 재고 반영 후 플랫폼에 /api/agent-report/import 보고한다.
+
+    2. 가공완료/출고완료 관리
+       - 생산이 끝난 라벨은 가공완료 또는 출고완료 상태로 처리한다.
+       - 완료 시 라벨코드, 수량, 납기일, 생산 시작시간, 생산 완료시간을 저장한다.
+       - 납기 내 완료된 물품은 플랫폼agent가 물류 판단에 사용할 수 있도록 /api/collected-release로 보고한다.
+
+    3. 생산스케줄 관리
+       - 진행중 주문의 라벨코드, 주문량, 납기일, 현재 재고, 기계 상태를 기준으로 생산 가능 여부를 판단한다.
+       - 납기 불가/납기 위험/납기 가능 상태를 계산한다.
+       - 완료예정 시각을 계산해 플랫폼에 /api/agent-report/schedule로 보고한다.
+
+    4. 기계배분 최적화
+       - 단순히 주문 목록만 보여주지 말고, 6대 인쇄기에 어떤 주문을 배정할지 AI가 추천해야 한다.
+       - 기계별 상태를 고려한다.
+         · 대기중
+         · 가동중
+         · 점검중
+         · 완료
+       - 납기일이 가까운 주문, 납기 위험 주문을 우선 배정한다.
+       - 기계가 비어 있으면 다음 작업을 추천한다.
+       - 점검중 기계는 배정 대상에서 제외한다.
+       - 가동중 기계는 현재 작업의 예상 완료시간을 계산하고, 그 이후 작업 배정 후보로만 본다.
+
+  구현 방향:
+    - 기존 라벨agent/AI_로직.txt, 생산규칙.txt, 라벨코드_규칙.txt를 먼저 읽고 반영한다.
+    - 단, 기계 대수는 이번 지시 기준인 6대를 우선한다.
+    - frontend/src/components/tabs/ProductionTab.jsx의 기계 시뮬레이션과 backend/services/ai_agent.py의 납기판단 로직을 연결한다.
+    - AI AgentPanel에는 "오늘 기계배정 추천"을 표시한다.
+      예:
+        · 인쇄기 1호: W3MJW01NV 5000장 우선 배정, 예상완료 14:20
+        · 인쇄기 2호: W1WTC01BK 3000장 배정 가능
+        · 인쇄기 4호: 점검중, 배정 제외
+
+  주의:
+    - 이 작업은 GPT API를 먼저 쓰는 것이 핵심이 아니다.
+    - 생산시간/재고/납기/기계상태는 숫자 계산이므로 규칙 기반으로 먼저 정확히 구현한다.
+    - GPT API는 필요할 경우 계산 결과를 자연어로 정리하는 보조 역할로만 사용한다.
+    - 로직 문서에 없는 세부 배정 기준은 임의 확정하지 말고 결과에 "로직 문서에 없음"이라고 기록한다.
+    - 구현 후 결과 항목에 수정한 파일, 3대→6대 정리 여부, 기계배분 로직 구현 여부를 기록할 것.
+
+결과: 완료
+  - backend/services/production_config.py 신규 생성
+    · 라벨 인쇄기 6대, 시간당 800장, 총 4,800장/h, 최대 일일 43,200장 기준 상수 분리
+    · 작업시간(09:00~18:00) 및 work-hour 계산 함수 공통화
+  - backend/models.py
+    · LabelMachine 테이블 추가
+    · 기계별 상태/배정 release_id/라벨코드/누적생산량/시작시간/가동시작시간/완료시간 저장
+  - backend/services/machine_state.py 신규 생성
+    · 6대 기계 기본 row 자동 보정
+    · 가동중 기계의 진행량/완료 여부를 현재 시각 기준으로 계산
+    · GET 시점에 완료된 기계는 완료 상태와 finished_at을 자동 동기화
+  - backend/routers/machine.py 신규 생성
+    · GET /machines/ 추가
+    · POST /machines/{id}/action 추가
+      - assign / start / stop / reset / status_change 지원
+      - 점검중 기계는 새 작업 배정 차단
+  - backend/main.py / init_db.py
+    · machine router 연결
+    · init_db 시 6대 기계 기본 데이터도 함께 시드
+  - backend/services/ai_agent.py
+    · 기존 3대 기준 제거, 6대 기준으로 납기판단 계산 통일
+    · /agent/status 응답에 machine_recommendations, machine_summary, machine_statuses 추가
+    · 기계 상태를 반영해 "오늘 기계배정 추천" 생성
+    · 점검중 기계 제외, 가동중 기계는 예상완료 후 후속 후보만 고려
+  - backend/routers/agent.py / backend/routers/release.py
+    · agent status 계산 시 실제 기계 상태 포함
+    · 생산 등록 시 스케줄 판단도 현재 기계 상태 기준 스냅샷 사용
+    · complete 시 저장된 started_at/finished_at 우선 사용
+  - frontend/src/services/api.js
+    · getMachines(), machineAction() 추가
+  - frontend/src/components/tabs/ProductionTab.jsx
+    · localStorage 기반 기계 시뮬레이션 제거
+    · 최초 1회 GET /machines + GET /agent/status 조회 후, 생산 등록/기계 조작 시에만 재조회
+    · 서버 기계 상태 기반으로 배정 기계/진행률/시작시간/완료시간 표시
+    · 생산 탭 내부에 "오늘 기계배정 추천" 표시 추가
+  - frontend/src/components/MachineLayout.jsx
+    · release_id 기준 배정으로 변경
+    · 기계별 추천 문구 표시
+    · 점검중 기계는 새 작업 배정 UI 비활성
+  - frontend/src/components/AgentPanel.jsx
+    · "오늘 기계배정 추천" 섹션 추가
+  - frontend/src/components/tabs/CompleteTab.jsx
+    · localStorage 생산로그 의존 제거
+    · 백엔드에 저장된 started_at / finished_at 기준으로 완료 처리/표시
+  - AI_로직.txt / 생산규칙.txt
+    · 3대 기준 문구를 6대 기준으로 정리 완료
+  - 3대→6대 정리 여부
+    · 완료
+  - 기계배분 로직 구현 여부
+    · 완료
+  - 로직 문서에 없음 기록
+    · 주문 1건을 여러 기계에 분할 투입하는 세부 규칙은 문서에 없어, 현재는 "기계 1대당 주문 1건" 기준의 단순 greedy 배정으로 구현
+
+----------------------------------------
+
+[2026-06-09 14:XX] 자재 입고일 × 납기일 매칭 → 플랫폼 채팅 보고
+지시: 라벨회사에서 자재 입고일과 가공품 납기일을 맞춰서 플랫폼 에이전트한테 채팅으로 보내는 기능 추가
+결과: 완료
+  - backend/services/deadline_check.py 신규 생성
+    · build_assessments_snapshot(release_snapshots, stock_map, material_arrivals)
+    · 현재 재고 기준 각 생산 주문의 자재 충족 여부, 완료예정, 납기상태 계산
+    · 자재 부족 시 대기중 발주의 입고예정일(material_arrival_date)을 포함
+    · 재고는 주문 순서대로 순차 소비해서 계산
+  - backend/services/platform_reporter.py
+    · STATUS_SEVERITY import 추가
+    · _send_deadline_check(trigger_event, trigger_detail, assessments) 내부 함수 추가
+    · report_deadline_check_on_import() — 자재 입고완료 시 활성 생산 주문 전체 납기체크 전송
+    · report_deadline_check_on_production() — 생산등록 시 해당 주문 납기체크 전송
+    · 보고 타입: "deadline_check" → /api/agent-report/schedule 으로 전송 (trigger_event 필드 포함)
+  - backend/services/platform_report_state.py
+    · _VISIBLE_REPORT_TYPES에 "deadline_check" 추가 (채널 UI에 표시)
+    · _report_type_label: "납기 체크" 추가
+    · _build_outbound_summary: deadline_check 포맷 추가
+      예: "라벨원단 50,000m 입고 (2026-06-09) → 납기체크 [납기가능]
+           W3MJW01NV 5,000장: 자재OK, 완료예상 10:03, 납기 2026-06-15, 납기가능"
+  - backend/routers/order.py
+    · LabelRelease import 추가
+    · receive_order: 입고완료 후 활성 생산 주문/재고/발주 데이터 수집
+    · report_deadline_check_on_import 백그라운드 태스크 추가
+  - backend/routers/release.py
+    · BackgroundTasks, LabelOrder, LabelStock, calculate_agent_result, normalize_material_name import 추가
+    · create_release: BackgroundTasks 파라미터 추가
+    · create_release: 재고/발주 사전조회 → report_schedule + report_deadline_check_on_production 백그라운드 태스크 추가
+    · 기존 create_release에 누락됐던 report_schedule 호출도 이번에 함께 추가
+  - 플랫폼agent backend/routers/agent_report.py
+    · ScheduleReport 스키마에 trigger_event, trigger_detail, overall_status, assessment_count, assessments 필드 추가
+    · report_schedule 핸들러: trigger_event 유무로 event_type 분기
+      - trigger_event 있음 → event_type="deadline_check", title="납기 체크 수신"
+      - trigger_event 없음 → event_type="agent_report_schedule" (기존 유지)
+  - 플랫폼agent backend/services/report_message.py
+    · COMPLETED_CHANNEL_EVENT_TYPES에 "deadline_check" 추가
+    · 플랫폼 채널 기본 조회(completed_only)에서 납기체크 메시지가 보이도록 설정
+  검증:
+    - python -m compileall 라벨agent/backend 통과
+    - python -m compileall 플랫폼agent/backend 통과
+
+----------------------------------------
+※ 다음 지시 시 아래 형식으로 추가할 것:
+
+[YYYY-MM-DD HH:MM] 지시 제목
+지시: (무엇을 요청했는지)
+결과: (무엇이 구현됐는지)
+========================================
+
+[2026-06-03 12:35] 기계배정 다건 큐 배정
+지시: 기계배정 버튼을 누를 때 발주 작업건이 한 건씩만 들어가지 말고, 여러 작업건이 순차로 들어가게 구현
+결과:
+  - backend/models.py
+    쨌 label_machine_queue 테이블 추가로 기계별 대기열 저장 구조 구현
+  - backend/services/machine_state.py
+    쨌 기계 스냅샷에 queue_count, queue_items 포함
+    쨌 reset 시 다음 대기 작업을 현재 작업으로 승격
+  - backend/routers/machine.py
+    쨌 assign는 현재 작업이 있으면 뒤 대기열에 추가
+    쨌 apply_plan 액션 추가로 AI 추천 순서를 한 번에 반영
+    쨌 같은 생산 작업이 다른 기계에 중복 배정되지 않도록 차단
+  - backend/services/ai_agent.py
+    쨌 기계별 단건 추천을 순차 큐 추천으로 확장
+    쨌 recommended 작업 + 뒤 대기열까지 포함한 apply_release_ids 계산
+    쨌 로직 문서에 없는 병렬 분할은 하지 않고, 기계별 순차 큐 greedy 방식으로 유지
+  - frontend/src/components/tabs/ProductionTab.jsx
+    쨌 기계배정 버튼이 apply_plan 기준으로 여러 작업건을 순차 반영하도록 변경
+    쨌 병렬 Promise.all 대신 순차 호출로 충돌 가능성 축소
+  - frontend/src/components/MachineLayout.jsx
+    쨌 기계 카드에 대기 작업 건수와 앞쪽 큐 미리보기 표시
+========================================
+
+[2026-06-03 12:48] 생산목록 큐 배정 표시 보정
+지시: 실제 기계 대기열에 배정된 작업이 생산목록 표에서는 미배정으로 보이는 문제 수정
+결과:
+  - frontend/src/components/tabs/ProductionTab.jsx
+    쨌 배정 기계 조회를 현재 release_id 뿐 아니라 machine.queue_items까지 포함하도록 보정
+    쨌 큐에 들어간 주문은 생산목록에서 해당 기계명 + 대기열 n순위로 표시
+    쨌 큐 대기 주문은 현재 작업 진행률을 잘못 공유하지 않도록 표시용 total_qty / produced_qty를 0으로 처리
+========================================
+
+[2026-06-03 13:15] 무게 로직 추가 및 플랫폼 연동
+지시: 라벨 완제품과 원자재 무게를 차량 매칭 기준으로 쓸 수 있도록 라벨agent 전반에 무게 환산 규칙을 연결
+결과:
+  - backend/services/weight_logic.py
+    · 라벨 1000장 = 1kg, 원단 1000장 생산분 = 1kg, 잉크 10통 = 1kg 규칙 공통화
+    · 완제품/원단/잉크/원자재 합계 중량 계산 함수 추가
+  - backend/models.py, backend/schemas.py
+    · 재고/발주/생산출고 응답에 weight_kg, product_weight_kg, material_weight_kg 계열 필드 추가
+  - backend/services/platform_reporter.py
+    · 생산등록 보고와 원자재 입고 보고 payload에 중량 정보 포함
+  - backend/services/platform_sender.py
+    · 출고완료 전송 시 shipping_weight_kg 포함
+  - backend/routers/release.py
+    · 패킹리스트 PDF 품목별 중량 및 총중량 표시
+  - frontend/src/components/tabs/StockTab.jsx
+    · 재고 현황에 환산중량(kg) 표시
+  - frontend/src/components/tabs/CompleteTab.jsx
+    · 완료 탭에 출고중량 및 기간 총중량 표시
+  - frontend/src/App.jsx
+    · AI 납기 분석 팝업에 완료중량/원단중량/잉크중량/원자재 합계중량 표시
+검증:
+  - python -m compileall E:\PROJECT\B2B PLATFORM 2\라벨agent\backend 통과
+  - npm.cmd run build 통과
+========================================
+
+[2026-06-04 13:53] 플랫폼 보고 채널 UI 추가
+지시: 라벨agent에 플랫폼agent와 API 보고 이벤트를 채팅처럼 확인하는 보고 전용 채널을 만들 것
+
+  목적:
+    라벨agent가 자기 DB를 플랫폼에 넘기는 것이 아니라,
+    라벨agent AI가 판단한 상황만 플랫폼에 보고하는 흐름을 화면에서 확인 가능하게 만든다.
+
+  중요한 원칙:
+    - 자유채팅 기능이 아니다.
+    - 실제 업무 처리는 기존 API JSON 보고로 한다.
+    - 채팅창은 라벨agent가 플랫폼에 보낸 보고 이벤트를 말풍선/타임라인처럼 보여주는 UI다.
+    - 채팅 텍스트를 파싱해서 비즈니스 로직을 돌리면 안 된다.
+
+  채널:
+    - 라벨 - 플랫폼 1개 채널만 표시
+
+  표시할 이벤트:
+    - 생산 등록 보고: /api/agent-report/schedule
+    - 재조정 보고: /api/agent-report/reschedule
+    - BL 입고 보고: /api/agent-report/import
+    - 출고완료 보고: /api/collected-release
+
+  화면 요구사항:
+    - 우측 AgentPanel 내부 또는 별도 "플랫폼 보고" 영역에 표시
+    - 메시지 방향 구분
+      · 라벨agent -> 플랫폼: 내가 보낸 보고
+      · 플랫폼 -> 라벨agent: 수신확인/오류/추가 지시가 있으면 표시
+    - 상태 표시: 전송완료 / 플랫폼 보고 대기 / 실패 / 수신확인
+
+  구현 방향:
+    - 기존 services/platform_reporter.py, services/platform_sender.py의 전송 상태 추적을 활용할 것
+    - 필요하면 report_message 같은 로컬 로그 저장 구조를 추가해도 됨
+    - 메시지 문구는 JSON payload를 사람이 읽기 쉽게 요약해서 생성한다
+      예: "W3MJW01NV 5,000장 생산등록 보고. 예상완료 14:20, 납기 가능."
+
+  주의:
+    - 플랫폼 장애가 라벨 업무를 막으면 안 됨
+    - 보고 실패 시 업무는 계속 진행하고 보고 채널에 "플랫폼 보고 대기"로 표시
+    - 구현 후 결과에 수정 파일과 추가한 상태 저장 방식/API를 기록할 것
+
+결과: 미완료
+========================================
+
+[2026-06-04 14:13] �÷��� ���� ä�� UI ���� �Ϸ�
+����: ��agent�� �÷���agent�� API ���� �̺�Ʈ�� ä��ó�� Ȯ���ϴ� ���� ���� ä���� ���� ��
+���:
+  - backend/services/platform_report_state.py
+    �� ���� �ֱ� ���� ���� ������ Ȯ���� ���� �̺�Ʈ�� ä���� �޽����� �޸𸮿� �Բ� ����
+    �� ��agent -> �÷���agent outbound �޽����� �÷���agent -> ��agent inbound ����Ȯ�� �޽��� ����
+    �� schedule/reschedule/import/release payload�� ����� �д� ��๮���� ��ȯ
+  - backend/services/platform_reporter.py
+    �� start_report�� payload�� �Ѱ� ���� ä�� ������ �����ϵ��� ����
+    �� �÷��� ���� JSON�� ������ ����Ȯ�� �޽��� ������ ���
+  - backend/services/platform_sender.py
+    �� ����Ϸ� ������ ������ ä�� ������ ���
+    �� �÷��� ���� ������ ��� �־ ���� ���� ó�� ����
+  - backend/routers/agent.py, backend/schemas.py
+    �� �÷���agent�� Ȯ��/����/�߰����ø� ���� �� �ֵ��� report-reply �Է� API �߰�
+  - frontend/src/components/AgentPanel.jsx
+    �� ���� �÷��� ���� ���� ������ �����ϸ鼭 ��ǳ�� ������ "�÷��� ���� ä��" UI �߰�
+    �� �ڵ� polling ���� ���� 1ȸ ��ȸ + ���� ���ΰ�ħ�� ���
+    �� ����ä�� �Է�â�� ������ �ʰ� ���� ���� Ÿ�Ӷ������� ����
+����:
+  - python -m compileall E:\PROJECT\B2B PLATFORM 2\��agent\backend ���
+  - npm.cmd run build ���
+����:
+  - ���� ä�� �α״� �޸� ����̶� ���� ����� �� �ʱ�ȭ��
+========================================
+
+[2026-06-04 14:30] ���� BL �Ľ� ��� �߰�
+����: ��agent ���ο� BL �Ľ� ����� ����� �����̷¿��� �߰� ����� ��¥/�ð��� �Բ� ����� ��
+���:
+  - backend/services/bl_parser.py
+    �� ��agent ���� PDF BL �ļ� �߰�
+    �� BL ��ȣ, ����ó, ETA, ǰ�� ��� ����
+    �� LABEL_FABRIC -> �� ����, PRINT_INK -> ��ũ�� ����
+    �� ���� ���� �ٷ� ���� �� �ֵ��� material_name, order_qty, supplier, due_date, note ������ ����ȭ
+    �� ���� ǰ���� ������ orders ��ϰ� �߰� ǰ�� ����� �Բ� ��ȯ
+  - backend/routers/agent.py
+    �� POST /agent/parse-bl �� �� �̻� �ܺ� 8010 ��Ʈ�� ���Ͻ����� �ʰ� ���� �ļ��� ���� �����ϵ��� ����
+    �� �ܺ� BL �ļ� �⵿̱���� ���� 503 ���� ����
+  - backend/requirements.txt
+    �� pdfplumber ������ �߰�
+  - backend/.env.example
+    �� �ܺ� BL_PARSER_URL ���� ����
+  - frontend/src/components/tabs/OrderTab.jsx
+    �� BL ���ε� accept Ÿ���� PDF �������� ����
+����:
+  - ���� ����ũ �׽�Ʈ PDF ���� �� parse_bl_document ���� Ȯ��
+    �� �� ���� 50000m, ��ũ 80��, ETA, BL ��ȣ ���� �Ľ� Ȯ��
+  - python -m compileall E:\PROJECT\B2B PLATFORM 2\��agent\backend ���
+  - npm.cmd run build ���
+����:
+  - ���� ���� �ļ��� PDF �����̸� �̹���(PNG/JPG) �Ľ��� �������� ����
+========================================
+
+[2026-06-04 14:40] ���� �� ������ BL ���� �ļ� ����
+����: mock_bl_label_company_raw_materials_0613_busan.pdf �� ���� ���� BL �ļ��� �� �´� �κ��� Ȯ���ϰ� ��agent ���� �ļ��� ���� BL ���Ŀ� �°� ������ ��
+���:
+  - backend/services/bl_parser.py
+    �� ���� [CODE] ... qty unit ���� �ܿ� ���� �������� ǥ ���ĵ� �Ľ��ϵ��� Ȯ��
+    �� TOTAL QUANTITY LABEL FABRIC: 120,000 M / PRINTING INK: 300 CANS ���� �ν� �߰�
+    �� LABEL FABRIC 300 ROLLS X 400 M = 120,000 M ���� fallback �ν� �߰�
+    �� MOCK-BL-... ��ȣ�� Expected Arrival ��¥(��: 13 Jun 2026) �Ľ� ���� �߰�
+    �� SHIPPER�� ù �� ȸ����� supplier�� �⵵�� ����
+����:
+  - mock_bl_label_company_raw_materials_0613_busan.pdf ���� ���� ���� ���� �Ľ� Ȯ��
+    �� supplier = LABEL MATERIAL SUPPLY CO., LTD.
+    �� material_name = �� ����
+    �� order_qty = 120000.0
+    �� due_date = 2026-06-13
+    �� orders �߰� ǰ������ ��ũ 300�� Ȯ��
+  - python -m compileall E:\PROJECT\B2B PLATFORM 2\��agent\backend ���
+����:
+  - ���� �� �ڵ� ä���� ù ��° ǰ�� �����̸�, ������ ǰ���� note�� orders ������� �Բ� ��ȯ��
+========================================
+
+[2026-06-04 14:46] BL �ٰ� ���� ��� ����
+����: ���� �� ������ BL ���ε� �� ���ܸ� ���� ��ũ�� �����Ǵ� ������ ������ ��
+���:
+  - frontend/src/components/tabs/OrderTab.jsx
+    �� BL �Ľ� ����� orders ���� ���� ������ ù ǰ�� ���� ���� ä���� �ʰ� "BL ���� �̸�����"�� ��ȯ
+    �� �̸����⿡�� �� ����/��ũ �� ���� ǰ���� �� ���� Ȯ�� �� �ϰ� ��� �����ϵ��� ����
+    �� ���� ǰ�� BL�� ����ó�� ���� �� �ڵ� ä�� ����
+    �� ���� �ϰ� ��ϰ� BL �ϰ� ��� �帧�� �� ȭ�鿡�� ���� ó���ϵ��� ����
+����:
+  - mock_bl_label_company_raw_materials_0613_busan.pdf ���� parse_bl_document ��� orders 2�� Ȯ��
+    �� 1���� = �� ����
+    �� 2���� = ��ũ
+  - npm.cmd run build ���
+  - python -m compileall E:\PROJECT\B2B PLATFORM 2\��agent\backend ���
+����:
+  - ���� BL �ٰ� ����� �̸����� �� ����ڰ� ��� ��ư�� ���� Ȯ���ϴ� ����̸� �ڵ� ��� ����� ���� ����
+========================================
+
+[2026-06-04 15:02] �÷��� ���� ä�� ���� ������ �и�
+����: AI �Ǵ��ϴ� ĭ���� �÷��� ���� ä���� �����ϰ�, �Ϸ� ���� �÷��� ���� ä�� �������� ���� ���� ��. �÷���agent�� ���� ä�� �� ������ ������ ��agent������ ������ ��
+���:
+  - frontend/src/App.jsx
+    �� �� ��Ͽ� "�÷��� ����" �߰�
+    �� �Ϸ� �� ������ ���� �������� ���� �����ϵ��� ����
+    �� getAgentStatus�� App �������� 1ȸ�� ��ȸ�ϰ� AgentPanel/PlatformReportTab�� �����ϵ��� ����
+  - frontend/src/components/AgentPanel.jsx
+    �� AI �Ǵ� �гο��� "�÷��� ���� ä��" ���� ����
+    �� "�÷��� ���� ����" ��ุ ����
+  - frontend/src/components/tabs/PlatformReportTab.jsx
+    �� �÷���agent ReportChannelsTab ������ ������ ��agent ���� 1:1 ���� ä�� ������ �߰�
+    �� ���� ä�� ī�� + �̺�Ʈ Ÿ�Ӷ��� + payload Ȯ�� UI ����
+    �� �ڵ� polling ���� ���� ���¿� ���� ���ΰ�ħ�� ���
+����:
+  - npm.cmd run build ���
+����:
+  - AI �гΰ� �÷��� ���� �������� ���� agent status ������ �����ϹǷ� �ߺ� API ȣ���� �߰����� ����
+========================================
+
+[2026-06-04 15:18] �÷��� �������޿� ��� payload Ȯ��
+����: �÷����� ���� �� �Ϸ���, BL ���ε� ����, ����, �ڽ� ��, ��ŷ����Ʈ�� �Բ� �����Ͽ� �÷����� �״�� �����翡 ������ �� �ְ� ���� ��
+���:
+  - backend/services/packing_list.py
+    �� ��¥ ���� ��ŷ����Ʈ PDF ���� ������ ���� ���񽺷� �и�
+    �� ǰ�� ���, �Ѽ���, ���߷�, PDF base64�� �Բ� ���� packing_list package ����
+  - backend/services/shipment_logic.py
+    �� ����Ϸ� ���� �Ϸ���, BL ��� ������ ���� ������, �ڽ� �� ��� ���� �߰�
+    �� completed_release_list / completed_release_count / completed_release_total_weight_kg ����
+    �� material_order_snapshot / bl_material_orders / bl_material_order_count ����
+  - backend/services/platform_sender.py
+    �� /api/collected-release ���� payload�� box_count, box_count_rule, �Ϸ���, BL ��������, packing_list�� �����ϵ��� Ȯ��
+    �� �÷����� ��agent payload�� �״�� ���� ���� �����ͷ� ������ �� �ְ� ����ȭ
+  - backend/routers/release.py
+    �� ����Ϸ� �� ������� �� export payload�� �����ؼ� �÷����� �Բ� ����
+    �� GET /releases/packing-list �� ���� packing_list ���� ������� ����
+  - backend/routers/order.py / backend/services/platform_reporter.py
+    �� �԰��Ϸ� ������ BL ��ȣ, ����ó, �����û��, ������� ����
+  - backend/services/material_names.py / backend/services/weight_logic.py / backend/routers/agent.py
+    �� '�󺧿���' / '�� ����' ǥ�� ���̸� ����ȭ�Ͽ� ���� ���, �԰� ó��, AI �м� �����ȸ�� ��鸮�� �ʵ��� ����
+  - backend/services/platform_report_state.py
+    �� ����Ϸ� ���� ä�� ��๮�� ����߷�, �ڽ� ��, ��ŷ����Ʈ ���� ���θ� ǥ��
+����:
+  - python -m compileall E:\PROJECT\B2B PLATFORM 2\��agent\backend ���
+  - ��� payload helper ����ũ �׽�Ʈ �Ϸ� (��ŷ����Ʈ ���� / �ڽ� �� / BL ��ȣ ���� Ȯ��)
+����:
+  - �ڽ� �� ��Ģ�� ���� ������ ���� �ӽ� �������� '10kg�� 1�ڽ�, �ø�'�� ����
+========================================
+
+[2026-06-04 15:29] �ɾ�󺧻� ä��â ���� ����
+����: �÷������� ������ ������ �ɾ�󺧻� ä��â���� �ٷ� ���̵��� ������ ��
+���:
+  - frontend/src/App.jsx
+    �� �� �̸��� '�ɾ�󺧻� ä��â'���� ����
+    �� ���� agent status ���¸� ���� �ǵ�� �����ϴ� sync �Լ� �߰�
+  - frontend/src/components/tabs/OrderTab.jsx
+    �� �԰��Ϸ� ó�� �� �÷��� ���� ���¸� 1ȸ ����ȸ�Ͽ� ä��â �޽����� ��� �ݿ��ǵ��� ����
+  - frontend/src/components/tabs/ProductionTab.jsx
+    �� ���� ���/��� ��ȸ �� ������ agent status�� App ������ ����ȭ�ϵ��� ����
+    �� ������ ������ ä��â ���¿� ���� �������� �ٷ� ������ ����
+  - frontend/src/components/tabs/CompleteTab.jsx
+    �� ����Ϸ� ó�� �� �÷��� ���� ���¸� 1ȸ ����ȸ�Ͽ� ä��â �޽����� ��� �ݿ��ǵ��� ����
+  - frontend/src/components/tabs/PlatformReportTab.jsx
+    �� ȭ�� ������ �ɾ�󺧻� ä��â���� ����
+    �� schedule/import/release/reschedule ���� payload �ٽɰ�(�߷�, �ڽ� ��, BL ��ȣ, ��ŷ����Ʈ ��)�� ä�� ī�� �ȿ� �ٷ� ǥ��
+    �� �� ���� �ȳ����� '�԰��Ϸ�/������/����Ϸ� �� ä�� ����' �������� ����
+����:
+  - npm.cmd run build ���
+����:
+  - �ڵ� polling�� �߰����� �ʾҰ�, ������ �߻���Ű�� ����� �׼� �ڿ��� ���¸� 1ȸ ����ȭ��
+========================================
+
+[2026-06-09 10:42] �÷��� ���� ä�� DB ����ȭ
+����: �����̷��� ���� �̱��� ���� ��, �÷��� ���� ä�� �αװ� �޸� ����̶� ���� ����� �� �ʱ�ȭ�Ǵ� �κ��� ������ ��
+���:
+  - backend/models.py
+    �� LabelPlatformReportEvent, LabelPlatformReportMessage ���̺� �߰�
+    �� ���� �̺�Ʈ�� ä�� �޽����� DB�� �и� �����ϵ��� ���� Ȯ��
+  - backend/services/platform_report_state.py
+    �� ���� deque �޸� ����Ҹ� DB ��� ����ҷ� ��ü
+    �� start_report / finish_report / record_platform_reply / get_report_status_snapshot �� ��� DB�� ����ϵ��� ����
+    �� �ֱ� ���� 30��, ä�� �޽��� 80�Ǹ� �����ϵ��� prune ó�� �߰�
+    �� agent/status ���信 storage=database, persistent=true ��Ÿ���� ����
+����:
+  - python -m compileall E:\PROJECT\B2B PLATFORM 2\��agent\backend ���
+  - Base.metadata.create_all �� start_report -> finish_report -> get_report_status_snapshot ����ũ �׽�Ʈ ���
+����:
+  - ���� �޸� ��� �α״� DB �������� ��ȯ�Ǹ�, �� ���̺� ���� �ݿ��� ���� �鿣�� ������� �ʿ��� �� ����
+========================================
+
+[2026-06-09 11:24] ��� �Ϸ� ��ư �� ���� �۾� �ڵ� �°�
+����: ��� ī���� '�ʱ�ȭ'�� '�Ϸ�'�� �ٲٰ�, �߰��� �Ϸ��ص� ���� ����� ������ �Ϸ� �������� ó���ǰ� �ϸ�, �Ϸ� �� ���� ��� �۾��� �ڵ����� ���� �۾����� �Ѿ�� ���� ��
+���:
+  - backend/services/release_completion.py
+    �� ����Ϸ� ���� ������ �и�
+    �� �Ϸ� ���� Ȯ��, ��� ����, ����Ϸ� ���� ��ȯ, �÷��� ���� payload ������ ����ȭ
+  - backend/routers/release.py
+    �� �Ϸ� ���� ���� ����Ϸᵵ ���� finalize ������ ����ϵ��� ����
+  - backend/routers/machine.py
+    �� ��� �׼ǿ��� reset ����, complete �߰�
+    �� complete �� ���� �۾��� �Ϻθ� ��������� �� ��������� release_qty�� Ȯ�� �� ����Ϸ� ó��
+    �� ��������� 0�̰ų� ���� ���̸� ���� �������� ��ü�� �Ϸ� �������� ó��
+    �� complete �� ���� queue �۾��� �ڵ����� ���� �۾����� �°�
+  - backend/services/machine_state.py
+    �� �̹� �ٸ� ȭ�鿡�� ����Ϸ�� �۾��� ��迡 ���� ������ ���� queue �۾����� �ڵ� �°��ϵ��� ����ȭ ����
+  - frontend/src/components/MachineLayout.jsx
+    �� ��� ī���� '�ʱ�ȭ' ��ư�� '�Ϸ�' ��ư���� ��ü
+  - frontend/src/components/tabs/ProductionTab.jsx
+    �� ��� �Ϸ� ��ư�� machine action complete �� ȣ���ϵ��� ����
+    �� ȭ�鿡 ���� ��谡 �۾����� �� ä�� �Ϸ� ���°� �Ǹ� 1ȸ�� complete API�� ȣ���� ���� queue�� �ڵ� �ѱ⵵�� ����
+����:
+  - python -m compileall E:\PROJECT\B2B PLATFORM 2\��agent\backend ���
+  - npm.cmd run build ���
+����:
+  - �ڵ� �Ϸ� API ȣ���� ��谡 ���� �Ϸ� ������ 1ȸ�� �߻��ϸ� polling �߰��� ���� ����
+========================================
+
+[2026-06-10 12:55] 수입/수출 보고, BL 항구 파싱, 패킹리스트/채널 정리
+지시: 최근 라벨agent 작업 내역을 지시이력에 정리할 것
+결과:
+  - 완료목록 / 패킹리스트
+    · 완료목록에서 체크박스로 선택한 출고건만 패킹리스트 PDF로 추출할 수 있도록 변경
+    · 기존 날짜 범위 전체 패킹리스트는 유지하고, 선택 추출용 POST /releases/packing-list/selected 추가
+  - 수출 보고 묶음 기준 정리
+    · 출고완료 플랫폼 보고를 개별 release 1건 기준이 아니라 납기일(report_batch_due_date) 묶음 기준으로 구성
+    · completed_release_list / completed_release_count / completed_release_qty_total / shipment_total_weight_kg /
+      shipment_box_count_total / packing_list / stock_snapshot / pending_material_order_snapshot 포함
+    · 동일 납기 완료건은 채팅/보고 상태에서 1개 묶음으로 보이도록 release dedupe 적용
+  - 플랫폼 보고 범위 축소
+    · 라벨agent visible 플랫폼 채널은 수입(BL 입고) + 수출(완료품)만 표시
+    · 내부 일정 chatter는 visible 채널에서 제외
+  - BL 파서 내장화 및 다품목 BL 처리
+    · /agent/parse-bl 을 외부 8010 의존 없이 내부 pdfplumber 파서로 전환
+    · LABEL_FABRIC + PRINT_INK 다품목 BL을 발주 미리보기 다건으로 등록 가능하게 변경
+    · mock_bl_label_company_raw_materials_0613_busan.pdf 포맷 대응
+  - 항구 정보 처리
+    · 발주표에 선적항 / 도착항 컬럼 추가, note 내 BL/POL/POD 파싱 표시
+    · BL PDF의 Port of Loading / Port of Discharge / Final Place of Delivery 3열 구간을 좌표 기반으로 읽어
+      Le Havre / Busan, Republic of Korea / Busan 정확히 추출하도록 수정
+    · 잘못 저장된 기존 BL note(POL/POD)도 동일 BL 번호 기준으로 보정
+  - 플랫폼 연동 보강
+    · 수입 보고 payload에 bl_number, port_of_loading, port_of_discharge, final_place_of_delivery,
+      receiving_company_location, supplier_company 포함
+    · 수출 보고 payload에 shipment_total_weight_kg, shipment_box_count_total, report_batch_due_date,
+      ai_report, packing_list 포함
+    · 플랫폼 collected-release 500 원인이던 unit 누락 수정
+  - 라벨 / 플랫폼 채널 UI
+    · 라벨agent PlatformReportTab에 최신 메시지 카드, 수입/수출 detail rows, DB 판단 요약 표시
+    · 플랫폼agent ReportChannelsTab에서 수입 메시지에 BL 번호, 선적항, 도착항, 최종도착지,
+      수령위치, 중량 표시되도록 연동 기준 정리
+  - API 호출 제어
+    · 화면 상시 자동 호출은 추가하지 않고, 업로드 / 입고 / 완료 / 수동 새로고침 시점에만 상태 갱신하도록 유지
+검증:
+  - python -m compileall E:\PROJECT\B2B PLATFORM 2\라벨agent\backend 통과
+  - npm.cmd run build (라벨agent/frontend) 통과
+  - python -m compileall E:\PROJECT\B2B PLATFORM 2\플랫폼agent\backend 통과
+  - npm.cmd run build (플랫폼agent/frontend) 통과
+  - mock_bl_label_company_raw_materials_0613_busan.pdf 파싱 결과
+    · port_of_loading = Le Havre
+    · port_of_discharge = Busan, Republic of Korea
+    · final_place_of_delivery = Busan
+기록:
+  - 화면의 "대기 10건"은 실제 10개 대기건이 아니라 2026-06-14 납기 묶음의 과거 release 실패이력 10개였고,
+    현재는 묶음 기준으로 집계되도록 수정하여 1건으로 보이게 정리함
+========================================
+
+----------------------------------------
+[2026-06-10] 플랫폼 보고 report_id 부여 + 실패건 자동 재시도
+지시: 라벨↔플랫폼 보고 송수신을 명확하게 하기 위해 아래 구조로 변경할 것
+
+배경:
+  - 06-09 13:30~13:44 사이 플랫폼 서버가 잠깐 응답 불가 상태였을 때 보낸 수출 보고(release) 10건이
+    label_platform_report_event에 status="플랫폼 보고 대기"로 영구히 남았고, 플랫폼 쪽
+    collected_release / report_message에는 끝내 도착하지 않음 (예: W2WPM10GY)
+  - 06-10 12:55 작업으로 화면에는 "대기 1건"처럼 묶음 단위로 보이게 됐지만, 이는 표시상의 dedupe일 뿐
+    실제 DB의 대기 레코드와 플랫폼 미수신 상태는 그대로임
+  - 재시도 로직이 없어서 한 번 실패하면 영구 누락됨 → 이번에 구조적으로 해결할 것
+  - (체크 결과) 코드 버그는 아니며, 동일 payload를 그대로 재전송하면 플랫폼이 정상 200으로 수신함을 확인함
+
+1) 공통 report_id 부여
+  - label_platform_report_event 테이블에 report_id 컬럼 추가 (예: "label-{event.id}")
+  - services/platform_report_state.py의 start_report()에서 event 생성 직후 report_id를 만들어 저장하고,
+    platform_reporter.py _post() / platform_sender.py send_release_to_platform()이
+    payload에 "report_id": report_id 를 추가해서 전송하도록 순서 조정
+    (현재는 start_report가 payload를 받아 event_id를 리턴하는 구조이므로,
+     payload 생성 → start_report 호출(report_id 확보) → payload에 report_id 주입 → 실제 POST 순으로 변경)
+
+2) 실패건 자동 재시도
+  - 신규 services/platform_retry.py 추가
+    · label_platform_report_event에서 status="플랫폼 보고 대기"인 행을 주기적으로(예: 2~3분 간격)
+      조회해서 저장된 payload_json + path로 재전송
+    · 성공 시 finish_report로 상태를 "전송완료"로 갱신
+  - main.py startup 이벤트에서 위 재시도 루프를 백그라운드 태스크로 시작
+  - 재시도 시에도 동일한 report_id를 그대로 보내서 플랫폼이 중복 수신을 식별할 수 있게 함
+
+3) (참고) 플랫폼 쪽은 별도 지시이력에 report_id 수신 / 중복방지(dedupe) / 수신확인(ack) 작업을 기록함.
+   이 작업과 짝을 맞춰서 진행할 것 (플랫폼이 report_id 응답을 주기 전까지는 "전송완료" 판정에
+   영향 없음 — 현재처럼 HTTP 200이면 성공으로 간주해도 무방)
+
+대상 파일:
+  - backend/models.py (LabelPlatformReportEvent / LabelPlatformReportMessage에 report_id 컬럼 추가)
+  - backend/services/platform_report_state.py (report_id 생성/저장)
+  - backend/services/platform_reporter.py (_post에 report_id 주입)
+  - backend/services/platform_sender.py (send_release_to_platform에 report_id 주입)
+  - 신규 backend/services/platform_retry.py (재시도 루프)
+  - backend/main.py (재시도 백그라운드 태스크 등록)
+  - DB/create_all.sql, backend/init_db.py (report_id 컬럼 반영)
+
+결과: 완료
+
+구현 내용:
+1) report_id 부여
+   - backend/models.py: LabelPlatformReportEvent / LabelPlatformReportMessage에
+     report_id = Column(String(50), nullable=True, index=True) 추가
+   - backend/services/platform_report_state.py: start_report()을
+     "이벤트 INSERT+flush(event.id 확보) → report_id=f'label-{event.id}' 생성
+      → payload 딕셔너리에 payload['report_id']=report_id 주입(in-place)
+      → event.report_id/payload_json, message.report_id/payload_json 저장 → commit"
+     순서로 변경. 반환값을 int(event_id) → tuple(event_id, report_id)로 변경.
+     payload를 in-place로 수정하므로 호출부가 들고 있는 동일 dict로 그대로 POST하면
+     report_id가 자동 포함됨.
+   - backend/services/platform_reporter.py _post(): start_report 반환값을
+     (event_id, _report_id)로 unpack하도록 수정 (payload 주입은 start_report 내부에서 처리)
+   - backend/services/platform_sender.py send_release_to_platform(): 동일하게
+     start_report 반환값 unpack 방식 수정
+
+2) 실패건 자동 재시도
+   - 신규 backend/services/platform_retry.py 추가
+     · run_platform_retry_loop(): 기동 즉시 1회 실행 후 PLATFORM_RETRY_INTERVAL_SECONDS
+       (기본 150초, .env로 조정 가능) 간격으로 반복
+     · status="플랫폼 보고 대기"인 label_platform_report_event 행을 조회해
+       저장된 payload_json(이미 report_id 포함)을 path(PLATFORM_BASE_URL + path)로 재전송
+     · 성공 시 finish_report(event_id, True, "플랫폼 보고 완료(재시도)", ...)로 "전송완료" 갱신
+     · 실패 시 조용히 다음 항목으로 진행 (라벨 업무 차단 없음)
+   - backend/main.py: @app.on_event("startup")에서
+     asyncio.create_task(run_platform_retry_loop()) 등록
+
+3) 기존 DB 컬럼 반영
+   - label_platform_report_event / label_platform_report_message 테이블은
+     SQLAlchemy Base.metadata.create_all()로만 생성되며 별도 SQL 파일에
+     정의되어 있지 않음 (DB세션/create_all.sql, backend/init_db.py에는 해당 테이블 없음).
+     create_all()은 기존 테이블에 컬럼을 추가하지 않으므로, backend/main.py에
+     _ensure_report_id_columns()를 추가하여 기동 시 information_schema를 조회해
+     report_id 컬럼이 없으면 ALTER TABLE ... ADD COLUMN report_id VARCHAR(50) NULL 실행
+     (이미 06-09 13:30~13:44에 적체된 status="플랫폼 보고 대기" 레코드도 재시도 대상에 포함됨)
+
+검증:
+  - python -m compileall 라벨agent/backend → 정상 (에러 없음)
+  - 프론트엔드 변경 없음 (백엔드 전용 작업)
+========================================
+
+[2026-06-11] BL 업로드(원단+잉크) 채팅창/플랫폼 보고 누락 점검
+
+지시: "지금 bl업로드한 내용 잉크랑 원단도 있는데 채팅창에 잉크만 잡히는게 문제고
+자세한 내용도 없고 플랫폼쪽으로 안가고 있어 문제체크해봐"
+
+점검 결과 (원인 분석):
+  - DB 확인 결과 BL 업로드로 발주 2건이 정상 생성되어 있었음
+    · id=20 라벨 원단 120,000m / id=21 잉크 300통
+    · 둘 다 동일 BL(MOCK-BL-0613-BUSAN-LABEL-RAW-001), POL Le Havre,
+      POD Busan, 공급사/납기 정보까지 note에 정상 저장됨
+    · 단, 둘 다 status="대기중" → 아직 "재고 입고" 버튼을 누르지 않은 상태
+  - report_import()(수입 입고 보고, 채팅창 메시지 생성 + 플랫폼 전송)는
+    routers/order.py receive_order()에서 "재고 입고" 클릭 시(대기중→입고완료)에만
+    background_tasks로 호출됨. 즉 입고 처리 전에는 두 자재 모두 보고가 발생하지 않음.
+  - 사용자가 채팅창에서 본 "잉크" 메시지는 BL과 무관한 기존 소량 발주(id=19, 잉크 3.0통,
+    BL/항구/공급사 정보 없음, 06-09에 이미 입고완료 처리됨)에서 생성된 것으로,
+    BL 정보가 없어 "자세한 내용 없음"으로 보였던 것임. "라벨 원단"은 아직 입고 보고 자체가
+    없어서 채팅창에 전혀 나타나지 않음.
+
+수정 방향 관련 사용자 지시:
+  - 1차로 "BL 등록 시 자동 입고 처리" 방안을 제안했으나 사용자가 명시적으로 거절함:
+    "아니야 이건 재고 들어온거는 사람이 완료 누르긴해야되서 대기중이랑 입고완료
+     <<이건 사람이 눌러야지 추천방식은 안쓰는게 좋을거 같아"
+  - 즉 대기중→입고완료 전환은 반드시 "재고 입고" 버튼의 사람 클릭으로만 이루어져야 하며,
+    자동 입고는 적용하지 않음 (이번 점검에서도 자동 입고 코드는 추가하지 않았음)
+
+검증 (코드 변경 없이 시뮬레이션으로 확인):
+  - id=20/21의 실제 note(BL/POL/POD/공급사/납기) 값을 그대로 사용해
+    report_import()가 만드는 payload 및 _build_outbound_summary("import", ...) 결과를
+    별도 스크립트로 재현 (DB 변경 없음, 임시 스크립트는 작업 후 삭제)
+  - 결과: "재고 입고"를 누르면 두 자재 모두 BL 번호/선적항/도착항/공급사/입고일/중량이
+    포함된 상세 "수입 입고 보고" 메시지가 정상 생성됨을 확인
+    · 라벨 원단: "라벨 원단 120,000m 수입 입고 보고. BL MOCK-BL-0613-BUSAN-LABEL-RAW-001.
+      선적항 Le Havre. 도착항 Busan, Republic of Korea. 공급사 LABEL MATERIAL SUPPLY CO., LTD..
+      입고일 2026-06-11. 중량 3,000kg"
+    · 잉크: "잉크 300통 수입 입고 보고. BL MOCK-BL-0613-BUSAN-LABEL-RAW-001. 선적항 Le Havre.
+      도착항 Busan, Republic of Korea. 공급사 LABEL MATERIAL SUPPLY CO., LTD..
+      입고일 2026-06-11. 중량 30kg"
+
+결과: 코드 버그 아님 (조사 완료, 코드 수정 없음)
+  - id=20(라벨 원단), id=21(잉크) 모두 발주/스톡 화면에서 "재고 입고" 버튼을 각각
+    눌러 입고완료 처리하면, 두 자재 모두 BL 상세정보 포함된 수입 보고가 채팅창에
+    표시되고 플랫폼으로 전송됨(연결 실패 시에도 기존 재시도 로직으로 자동 재전송).
+========================================
+
+[2026-06-11] 패킹리스트 플랫폼 첨부 형식 PDF → CSV 변경
+
+지시: "추가적으로 패킹리스트는 pdf로 만들지말고 csv파일로 만들어서 플랫폼채팅창에
+첨부해줘야 하는데 가능하냐?? pdf는 읽는데 api비용 드니까 csv파일로 만들어서
+주는게 좋을거 같어"
+
+대상: 출고완료 보고(report_type="release") 시 플랫폼으로 전송되는 packing_list
+(라벨회사 자체 화면의 패킹리스트 PDF 다운로드 버튼은 대상 아님 — 별도 기능 유지)
+
+구현 내용:
+  - backend/services/packing_list.py
+    · build_packing_list_csv_bytes() 신규 추가: 기존 PDF와 동일한 항목
+      (No./Label Code/Description/Fabric-Color-Style/Qty/Weight + TOTAL행)을
+      UTF-8 CSV로 생성
+    · build_packing_list_package()를 PDF 대신 CSV를 생성하도록 변경
+      - 파일명: packing_list_{from}_{to}.csv
+      - pdf_base64/pdf_size_bytes → csv_base64/csv_size_bytes, content_type="text/csv" 추가
+    · build_packing_list_pdf_bytes()는 그대로 유지 (라벨회사 화면의
+      패킹리스트 PDF 다운로드 엔드포인트(routers/release.py)에서 계속 사용)
+  - backend/services/platform_report_state.py
+    · _enrich_release_payload()에서 재계산하는 packing_list 파일명도
+      ".pdf" → ".csv"로 변경
+
+검증:
+  - 임시 스크립트로 build_packing_list_csv_bytes()/build_packing_list_package() 실행 →
+    헤더(Shipper/Issue Date/Period/Items) + 품목 표 + TOTAL행 형태의 CSV가 정상 생성됨,
+    filename이 packing_list_2026-06-13_2026-06-13.csv로 출력됨 (임시 스크립트는 삭제함)
+  - python -m compileall 라벨agent/backend → 정상 (에러 없음)
+  - 프론트엔드는 packing_list.filename/total_weight_kg만 참조하므로 별도 수정 불필요
+========================================
+
+[2026-06-11] BL 발주(대기중)도 입고예정 통지로 플랫폼/채팅창에 전송
+
+지시: "재고입고라고 눌러야지 플랫폼채팅에 넘어간다는거지?? 야 그럼 안되지 배달 받아야되는건데
+bl넣어서 어디로 물건도착하는지 써있고 하니까 대기중인거를 전송해줘야지"
+→ 위 점검(같은 날짜 항목)에서 "재고 입고를 눌러야 보고가 간다"고 안내한 데 대해,
+  사용자는 "대기중"(아직 입고 전, 선적/배송 중)인 BL 발주도 BL의 도착지 정보 등을
+  플랫폼에 미리 전달해야 한다고 정정함.
+
+구현 내용:
+  - backend/services/platform_reporter.py
+    · report_import()에 status: str = "입고완료" 파라미터 추가, payload에 "status" 필드 포함
+      (기존 receive_order 호출은 인자 그대로라 자동으로 "입고완료" 유지)
+  - backend/services/platform_report_state.py
+    · _build_outbound_summary()의 report_type=="import" 분기에서 payload["status"]에 따라
+      문구 분기: "입고완료" → 기존과 동일("...수입 입고 보고", "입고일 ...")
+      "입고예정"(또는 기타) → "...수입 {status} 통지", 날짜 라벨도 "{status}일"로 표시
+  - backend/routers/order.py
+    · create_order()에 background_tasks: BackgroundTasks 파라미터 추가
+    · 발주 생성 직후 extract_bl_number(order.note)로 BL 정보가 있는 발주(주로 BL 업로드로
+      생성된 발주)인 경우, report_import(..., status="입고예정")를 백그라운드로 호출해
+      "대기중" 상태에서도 BL/선적항/도착항/공급사/입고예정일/중량 정보를 채팅창 +
+      플랫폼으로 즉시 전송. (대기중→입고완료 전환은 기존과 동일하게 "재고 입고" 버튼의
+      사람 클릭으로만 발생 — 자동 입고처리는 여전히 추가하지 않음)
+  - frontend/src/components/tabs/PlatformReportTab.jsx
+    · buildDetailRows()의 report_type==='import' 행에 "처리상태"(입고완료/입고예정) 행과
+      상태에 따라 "입고일"/"입고예정일" 라벨이 바뀌는 날짜 행을 추가
+
+기존 대기중 BL 발주(id=20 라벨 원단, id=21 잉크) 소급 처리:
+  - 위 신규 로직은 "발주 생성 시점"에만 동작하므로, 이미 생성되어 "대기중"으로 남아있던
+    20/21번 발주는 그대로는 보고가 가지 않음 → 1회성 스크립트로 동일한
+    report_import(..., status="입고예정")를 직접 호출해 소급 전송 (스크립트는 실행 후 삭제)
+  - 결과: 플랫폼agent(localhost:8000, 실행 중)가 두 건 모두 정상 수신(전송완료 + "수신확인" 응답)
+    · 라벨 원단: "라벨 원단 120,000m 수입 입고예정 통지. BL MOCK-BL-0613-BUSAN-LABEL-RAW-001.
+      선적항 Le Havre. 도착항 Busan, Republic of Korea. 공급사 LABEL MATERIAL SUPPLY CO., LTD..
+      입고처 케어라벨사 공장. 입고예정일 2026-06-13. 중량 3,000kg"
+    · 잉크: "잉크 300통 수입 입고예정 통지. BL MOCK-BL-0613-BUSAN-LABEL-RAW-001. 선적항 Le Havre.
+      도착항 Busan, Republic of Korea. 공급사 LABEL MATERIAL SUPPLY CO., LTD.. 입고처 케어라벨사 공장.
+      입고예정일 2026-06-13. 중량 30kg"
+  - 이후 실제로 "재고 입고" 버튼을 누르면 기존과 동일하게 status="입고완료" 보고가 별도로
+    추가 전송됨(같은 자재에 대해 "입고예정" 통지 + "입고완료" 보고 두 메시지가 모두 채팅창에 남음)
+
+결과: 완료
+검증:
+  - python -m compileall 라벨agent/backend → 정상 (에러 없음)
+  - npm run build (라벨agent/frontend) → 정상 빌드 (경고만 있음, 청크 사이즈 경고는 기존과 동일)
+  - 위 소급 전송 결과를 get_report_status_snapshot()으로 조회해 채팅 메시지(전송완료 + 수신확인)
+    정상 생성 확인
+  - 참고: 라벨agent 백엔드(8001)는 현재 미실행 상태였고, 플랫폼agent(8000)만 실행 중이었음.
+    라벨agent 백엔드를 (재)시작해야 이번 코드 변경(신규 발주 시 입고예정 자동 전송,
+    패킹리스트 CSV)이 실제 서비스에 반영됨.
+========================================
+
+[2026-06-11] 패킹리스트 다운로드(완료 페이지 포함)도 PDF → CSV로 통일
+
+지시: "패킹리스트관련된건 다 csv파일로 만들게해 완료페이지에서도 마찬가지야"
+→ 직전 항목에서 플랫폼 전송용 packing_list만 CSV로 바꿨는데, 완료(CompleteTab) 페이지의
+  "선택 패킹리스트 다운로드" 등 사람이 직접 받는 패킹리스트도 모두 CSV로 통일해달라는 요청.
+
+구현 내용:
+  - backend/services/packing_list.py
+    · PDF 생성용 build_packing_list_pdf_bytes()와 reportlab 관련 import(BytesIO/A4/colors/
+      getSampleStyleSheet/cm/Paragraph/SimpleDocTemplate/Spacer/Table/TableStyle) 전부 제거
+      (사용처가 없어짐 — build_packing_list_items()/_label_en() 등 공용 로직은 그대로 유지)
+  - backend/routers/release.py
+    · _stream_packing_list(): build_packing_list_pdf_bytes → build_packing_list_csv_bytes로 교체,
+      media_type "application/pdf" → "text/csv", 파일명 ...{N}items.pdf → ...{N}items.csv
+      (GET /releases/packing-list, POST /releases/packing-list/selected 둘 다 적용,
+       완료 페이지의 "선택 패킹리스트 다운로드"는 후자를 사용)
+  - backend/requirements.txt: reportlab 의존성 제거 (더 이상 사용 안 함)
+  - frontend/src/services/api.js
+    · downloadPackingList()/downloadSelectedPackingList(): blob type을
+      "application/pdf" → "text/csv", 다운로드 파일명 확장자 .pdf → .csv로 변경
+
+결과: 완료
+검증:
+  - python -m compileall 라벨agent/backend → 정상 (에러 없음, reportlab 미설치 환경에서도 정상)
+  - npm run build (라벨agent/frontend) → 정상 빌드
+  - build_packing_list_csv_bytes()를 출고건 1건으로 직접 호출해 CSV 출력 형식
+    (헤더 4행 + 빈줄 + 컬럼헤더 + 품목행 + TOTAL행) 정상 확인
+========================================
+
+----------------------------------------
+[2026-06-11] 출고완료 보고 시 패킹리스트 CSV 플랫폼 전송 확인 지시
+지시: 라벨회사에서 작업/출고완료 보고를 플랫폼으로 보낼 때 packing_list CSV가 반드시
+  payload에 포함되어 넘어가도록 확인할 것. 만약 현재 전송 기능이 빠져 있으면 추가할 것.
+
+작업 방향:
+  - 출고완료 보고(POST 플랫폼 /api/collected-release) payload에 packing_list 객체를 포함한다.
+  - packing_list는 PDF가 아니라 CSV 기준으로 보낸다.
+  - 필수 포함값:
+    · filename
+    · content_type = "text/csv"
+    · period_from / period_to
+    · total_qty
+    · total_weight_kg
+    · label_code_count
+    · csv_base64
+    · csv_size_bytes
+  - completed_release_list와 같은 완료 묶음을 기준으로 CSV를 생성한다.
+  - 플랫폼이 DB에 저장하고 채팅창에서 다운로드할 수 있도록 csv_base64 원문이 누락되지 않게 한다.
+  - 이미 기능이 구현되어 있으면 수정하지 말고, 실제 출고완료 보고 payload에 packing_list가
+    포함되는지만 검증하고 결과를 기록한다.
+
+확인 기준:
+  - 라벨agent 출고완료 보고 payload에 packing_list.csv_base64가 포함된다.
+  - 플랫폼 수신 후 플랫폼 채팅창/packing_list DB에서 같은 패킹리스트를 확인할 수 있다.
+  - API 실패 시 기존 report_id/재시도 로직과 충돌하지 않는다.
+
+결과: 후속 검증 완료 (아래 2026-06-11 15:06:20 기록 참고)
+========================================
+
+----------------------------------------
+[2026-06-11 15:06:20] 출고완료 보고 패킹리스트 CSV 플랫폼 전송 검증 완료
+
+지시 배경:
+  - 2026-06-11에 등록한 "출고완료 보고 시 패킹리스트 CSV 플랫폼 전송 확인" 후속 검증.
+
+검증 내용:
+  - 라벨agent backend `build_export_shipment_payload()` 기준 실제 출고완료 묶음 payload 확인
+    · 기준 출고건: `W2WPM10GY`
+    · `packing_list.filename = packing_list_2026-06-14_2026-06-14.csv`
+    · `packing_list.content_type = text/csv`
+    · `packing_list.period_from / period_to = 2026-06-14 / 2026-06-14`
+    · `packing_list.total_qty = 32758`
+    · `packing_list.total_weight_kg = 32.758`
+    · `packing_list.label_code_count = 20`
+    · `packing_list.csv_size_bytes = 2224`
+    · `packing_list.csv_base64` 포함 확인
+  - 플랫폼agent `routers/collected.py::_save_packing_list()` 롤백 검증
+    · 현재 CSV payload로 `PackingList` 엔트리 생성 가능 확인
+    · `content_type`, `period_from`, `period_to`, `total_qty`, `total_weight_kg`, `label_code_count` 저장 가능 확인
+    · `_attach_packing_list_metadata()` 처리 후 채팅 payload에서는 `csv_base64` 제거되고
+      `packing_list_id`, `download_url`만 남도록 확인
+  - 플랫폼 DB 실데이터 확인
+    · 최신 출고 보고 `report_message id 36~40` 생성 시각은 `2026-06-11 12:00:38 ~ 12:00:42`
+    · 이 메시지들은 CSV 전환 코드 반영(12:58 이후) 이전 runtime에서 전송된 payload라
+      `packing_list` 내부가 `pdf_base64 / pdf_size_bytes` 구조였음
+    · 따라서 현재 플랫폼 DB `packing_list` 테이블이 비어 있던 원인은 "CSV 저장 로직 불량"이 아니라
+      "CSV 전환 이전 구버전 출고 보고만 들어와 있었기 때문"으로 확인
+
+결과: 완료
+비고:
+  - 현재 소스코드 기준으로는 출고완료 보고 payload에 CSV 패킹리스트가 정상 포함된다.
+  - 라벨agent backend를 재시작한 뒤 새 출고완료 보고가 1건 이상 발생하면 플랫폼 `packing_list` 테이블에
+    CSV가 실제 저장된다.
+========================================
+
+----------------------------------------
+[2026-06-11 15:26:53] 패킹리스트 다운로드 형식 CSV/XLSX 2종 선택지 추가
+
+지시 배경:
+  - 패킹리스트를 PDF로 유지하면 다른 세션/서비스에서 다시 읽을 때 불필요한 PDF 파싱이나 API 비용이 들 수 있으니
+    다운로드 형식을 표준 데이터 파일 위주로 바꿔달라는 요청.
+
+구현 내용:
+  - backend `services/packing_list.py`
+    · CSV 생성 로직과 공용 row 생성 로직 분리
+    · 동일 패킹리스트 데이터를 `.xlsx`로도 생성하는 경량 exporter 추가
+    · 외부 라이브러리 없이 표준 라이브러리(zip/xml)만 사용하도록 구현
+  - backend `routers/release.py`
+    · `GET /releases/packing-list?format=csv|xlsx`
+    · `POST /releases/packing-list/selected?format=csv|xlsx`
+    · 잘못된 형식 요청 시 400 반환
+  - frontend `src/components/tabs/CompleteTab.jsx`
+    · 완료목록 상단 버튼을 `CSV 다운로드` / `XLSX 다운로드` 2개로 분리
+    · 체크된 완료건만 원하는 형식으로 다운로드 가능
+  - frontend `src/services/api.js`
+    · 서버 `Content-Disposition` 파일명을 그대로 받도록 수정
+    · `csv`, `xlsx` 포맷별 blob type 분기 처리
+
+검증:
+  - `python -m compileall 라벨agent/backend` 정상
+  - 패킹리스트 `.xlsx` 직접 생성 검증
+    · zip 엔트리: `[Content_Types].xml`, `_rels/.rels`, `xl/workbook.xml`, `xl/styles.xml`,
+      `xl/_rels/workbook.xml.rels`, `xl/worksheets/sheet1.xml`
+    · sheet 내부에 `TOTAL` 및 실제 라벨코드 포함 확인
+  - `cmd /c npm run build` (라벨agent/frontend) 정상
+
+결과: 완료
+비고:
+  - 플랫폼 전송용 packing_list payload는 계속 CSV 기준 유지한다.
+  - 사용자 다운로드만 `CSV / XLSX` 2종 선택 가능하도록 확장했다.
+========================================

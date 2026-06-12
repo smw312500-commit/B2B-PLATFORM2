@@ -1,4 +1,3 @@
-========================================
 플랫폼agent 세션 지시 이력
 ========================================
 형식: [YYYY-MM-DD HH:MM] 지시 내용 / 결과
@@ -224,9 +223,503 @@
     · 라벨agent 형태 sample payload 모델 파싱 확인
 
 ----------------------------------------
+[2026-06-09 10:46] 물류 가용 기사 확인 및 자동 배차 매칭 보강
+----------------------------------------
+지시: 지시이력 기준 실제 미완료 구간인 "생산기업 완료 목록 → 물류 가용 기사 확인 → 기사/차량 매칭" 흐름을 플랫폼agent에 연결할 것
+
+  구현 목표:
+    - 3사 출고완료로 dispatch 생성 시 물류agent에 화물 등록
+    - 물류agent AI 자동배차 호출
+    - 배차 확정 결과를 플랫폼 dispatch 테이블과 보고 채널에 반영
+    - 플랫폼 화면에서 가용 기사/차량과 배차 결과를 확인 가능하게 표시
+
+결과: [2026-06-09] 완료
+  - backend/models.py
+    · dispatch 테이블에 물류 연동 필드 추가
+      - logistics_delivery_id
+      - logistics_driver_id / driver_name
+      - logistics_vehicle_id / vehicle_plate
+      - empty_return
+      - logistics_message
+  - backend/init_db.py
+    · 기존 DB에도 dispatch 신규 컬럼이 자동 추가되도록 보강
+  - backend/services/logistics_bridge.py
+    · 물류agent 화물 등록
+    · 물류agent AI 자동배차 호출
+    · 기존 delivery_id가 있으면 재등록 없이 재매칭만 수행
+    · 기사/차량/귀로 정보 플랫폼 dispatch에 동기화
+    · 플랫폼-물류 보고 채널에 배차 요청 / 배차 확정 / 재매칭 / 귀로 결과 기록
+  - backend/services/dispatch_auto.py
+    · dispatch 생성 후 단순 signal 전송 대신 register_and_match_dispatch() 호출로 변경
+  - backend/routers/dispatch.py
+    · GET /api/dispatch/availability 추가
+      → 물류agent의 현재 가용 기사/차량 목록 조회
+    · POST /api/dispatch/{dispatch_id}/match 추가
+      → 기존 배차 건 재매칭 요청
+  - backend/schemas.py
+    · DispatchOut 확장
+    · DispatchAvailabilityOut / DispatchMatchOut 추가
+  - frontend/src/api.js
+    · 배차 가용현황 조회 API
+    · 재매칭 API 추가
+  - frontend/src/components/tabs/DispatchTab.jsx
+    · 가용 기사 / 가용 차량 / 배차 확정 카드 추가
+    · 기사 / 차량 / 귀로판단 / 매칭메모 컬럼 추가
+    · 재매칭 버튼 추가
+    · 현재 가용 기사 목록 표시
+  - 검증
+    · python -m compileall backend 통과
+    · npm run build 통과
+
+----------------------------------------
+[2026-06-09 11:02] 보고 채널 완료 이벤트만 표시하도록 조정
+----------------------------------------
+지시: 플랫폼 입장에서는 납기 가능/진행중 같은 중간 상태는 필요 없으므로 채팅형 보고 채널에는 완료된 이벤트만 가져오도록 조정할 것
+
+결과: [2026-06-09] 완료
+  - backend/services/report_message.py
+    · 보고 채널 완료 이벤트 타입 집합 추가
+      - collected_release
+      - agent_report_import
+      - platform_signal
+      - dispatch_confirmed
+      - round_trip_result
+      - logistics_complete
+  - backend/routers/report_channels.py
+    · GET /api/report-channels 기본 조회를 completed_only=true로 조정
+    · GET /api/report-channels/{channel}/messages 기본 조회를 completed_only=true로 조정
+    · schedule / reschedule 같은 진행성 이벤트는 채널 화면 기본 조회에서 제외
+  - frontend/src/components/tabs/ReportChannelsTab.jsx
+    · "완료/입고/배차확정처럼 끝난 이벤트만 표시" 문구로 변경
+    · 진행중/재조정 상태 강조 제거
+  - 검증
+    · python -m compileall backend 통과
+    · npm run build 통과
+
+----------------------------------------
+[2026-06-09] 물류 기사 목록 수신 및 저장
+지시: 물류agent가 전송하는 기사 전체 목록을 받아서 플랫폼 DB에 저장할 것
+      귀로 최적화 계산 시 물류 API 의존 없이 플랫폼 자체 DB에서 조회 가능하게 할 것
+
+  목적:
+    현재 플랫폼은 귀로 판단 시 물류에 GET 요청을 매번 날려야 함
+    물류 서버가 다운되면 귀로 판단 불가
+    플랫폼이 기사 목록을 자체 DB에 보유하면 물류 장애와 무관하게 귀로 계산 가능
+
+  수신 엔드포인트 추가:
+    POST /api/logistics/drivers/sync
+    - 물류agent가 보내는 기사 전체 목록을 받아 플랫폼 DB에 upsert
+    - driver_id 기준으로 기존 행은 업데이트, 없으면 신규 삽입
+
+  저장할 데이터:
+    - driver_id, name, location_si (소속지역)
+    - vehicle_type, vehicle_plate
+    - status (가용/운행중/휴무)
+    - current_delivery_id, current_destination
+    - estimated_arrival (도착 예정일)
+    - last_synced_at (마지막 동기화 시각)
+
+  DB 테이블:
+    - 플랫폼 DB에 logistics_driver_cache 테이블 신규 추가
+    - 물류 DB를 직접 읽지 않고 이 캐시 테이블로만 조회
+
+  활용:
+    - 귀로 최적화: 인천항/부산항 도착 예정 기사 중 귀로 화물 매칭
+    - 배차 현황 탭: 물류 API 없이도 기사 목록/상태 표시
+    - 플랫폼 AI 인사이트: 가용 기사 수, 지역별 분포 등 판단 가능
+
+  수정 대상 파일:
+    - backend/models.py — logistics_driver_cache 테이블 추가
+    - backend/routers/logistics_sync.py — 신규, POST /api/logistics/drivers/sync 엔드포인트
+    - backend/main.py — router 등록
+    - backend/init_db.py — 새 테이블 반영
+
+결과: [2026-06-10] 완료
+  - backend/models.py
+    · LogisticsDriverCache 테이블 추가
+      - driver_id(unique), name, location_si, vehicle_type, vehicle_plate, status
+      - current_delivery_id, current_destination, estimated_arrival, last_synced_at
+  - backend/schemas.py
+    · LogisticsDriverSyncItem / LogisticsDriverSyncIn 추가
+  - backend/routers/logistics_sync.py
+    · POST /api/logistics/drivers/sync 신규
+      → driver_id 기준 upsert, last_synced_at 갱신
+  - backend/main.py
+    · logistics_sync 라우터 등록
+  - backend/init_db.py
+    · Base.metadata.create_all로 신규 테이블 자동 생성 확인
+  - 검증
+    · python -m compileall backend 통과
+    · TestClient로 /api/logistics/drivers/sync 호출 → upsert 확인 후 테스트 데이터 정리
+
+----------------------------------------
+[2026-06-09 14:XX] 라벨agent deadline_check 보고 수신 호환 추가
+지시: 라벨agent가 자재 입고일 × 납기일 매칭 결과를 "deadline_check" 타입으로 전송할 때
+      플랫폼이 이를 구분해서 보고 채널에 표시하도록 수신 측 보강
+결과: 완료
+  - backend/routers/agent_report.py
+    · ScheduleReport에 trigger_event, trigger_detail, overall_status, assessment_count, assessments 필드 추가
+    · report_schedule 핸들러: trigger_event 유무로 event_type 분기
+      - trigger_event 있음 → event_type="deadline_check", title="납기 체크 수신"
+      - trigger_event 없음 → event_type="agent_report_schedule" (기존 유지)
+    · deadline_check 수신 시 summary: "케어라벨사 라벨원단 입고 → N건 납기체크. 전체상태: 납기가능"
+  - backend/services/report_message.py
+    · COMPLETED_CHANNEL_EVENT_TYPES에 "deadline_check" 추가
+    · 플랫폼 보고 채널 기본 조회(completed_only=true)에서 납기체크 메시지 포함
+  검증:
+    · python -m compileall backend 통과
+
+----------------------------------------
+[2026-06-10] 라벨사 플랫폼 연동 기준 문서화
+지시: 플랫폼 세션에서는 라벨사 수입/수출 보고 경로, 핵심 payload, 채팅 조회 경로를 아래 기준으로 인지하고 작업할 것
+  - 수입 보고: POST /api/agent-report/import
+  - 수출 보고: POST /api/collected-release
+  - 채팅 표시 데이터: GET /api/report-channels, GET /api/report-channels/label/messages
+  - 라벨agent 디버깅: GET http://localhost:8001/agent/status
+결과: 반영 완료
+  - 세션_지시문.txt에 라벨사 연동 기준 메모 추가
+    · 라벨 수입 보고 핵심 필드
+      - bl_number
+      - port_of_loading
+      - port_of_discharge
+      - final_place_of_delivery
+      - receiving_company_location
+      - supplier_company
+      - weight_kg
+    · 라벨 수출 보고 핵심 필드
+      - report_batch_due_date
+      - completed_release_list
+      - completed_release_count
+      - completed_release_qty_total
+      - shipment_total_weight_kg
+      - shipment_box_count_total
+      - packing_list
+      - ai_report
+    · 플랫폼 채팅 조회 기준 경로 및 관련 파일 위치 추가
+    · 라벨agent platform_report_status 디버깅 경로 추가
+
+----------------------------------------
 ※ 다음 지시 시 아래 형식으로 추가할 것:
 
 [YYYY-MM-DD HH:MM] 지시 제목
 지시: (무엇을 요청했는지)
 결과: (무엇이 구현됐는지)
+========================================
+
+----------------------------------------
+[2026-06-10] 라벨 보고 report_id 수신 / 중복방지(dedupe) + 수신확인
+지시: 라벨agent 쪽에서 진행하는 "보고 report_id 부여 + 실패건 자동 재시도"와 짝을 맞춰
+  플랫폼이 report_id 기반으로 중복 수신을 막고 수신확인을 내려줄 것
+
+배경:
+  - 06-09 13:30~13:44 라벨의 수출 보고(release) 10건이 플랫폼 서버 일시 다운으로 전부 실패,
+    재시도 로직이 없어 W2WPM10GY 등 일부는 끝까지 플랫폼 collected_release / report_message에
+    도착하지 못했음 (체크 결과 코드버그는 아니고, 동일 payload 재전송 시 정상 200 처리됨을 확인함)
+  - 라벨이 재시도를 보내기 시작하면 같은 보고가 두 번 도착할 수 있으므로,
+    플랫폼이 report_id로 중복을 걸러야 함
+
+1) report_message 테이블에 source_report_id 컬럼 추가 (nullable, varchar)
+2) 수신 엔드포인트들 (POST /api/agent-report/schedule, /reschedule, /import,
+   POST /api/collected-release)
+   - 각 pydantic 스키마에 report_id: Optional[str] = None 추가
+   - record_channel_message 호출 전, source_report_id로 기존 report_message 행이
+     있는지 조회 → 있으면 새 AgentReport / CollectedRelease / report_message 행을 추가로
+     만들지 않고 기존 행을 그대로 반환 (idempotent 처리)
+   - 응답 바디에 {"report_id": ..., "received": true} 형태로 echo
+3) services/report_message.py에 source_report_id로 기존 메시지를 찾는 헬퍼 함수 추가
+
+대상 파일:
+  - backend/models.py (ReportMessage에 source_report_id 컬럼 추가)
+  - backend/services/report_message.py (dedupe 조회 헬퍼)
+  - backend/routers/agent_report.py (schedule / reschedule / import에 report_id 처리)
+  - backend/routers/collected.py (collected-release에 report_id 처리)
+  - backend/init_db.py (source_report_id 컬럼 반영)
+
+결과: [2026-06-10] 완료
+  - backend/models.py
+    · ReportMessage에 source_report_id (nullable, varchar) 컬럼 추가
+  - backend/init_db.py
+    · _ensure_report_message_columns() 추가
+      → 기존 DB에도 source_report_id 컬럼 자동 ALTER 반영
+  - backend/services/report_message.py
+    · find_message_by_report_id(db, source_report_id) 헬퍼 추가
+    · record_channel_message()에 source_report_id 파라미터 추가 → 저장
+  - backend/schemas.py
+    · CollectedReleaseIn / CollectedReleaseOut에 report_id 추가
+    · CollectedReleaseOut에 received(bool) 추가
+  - backend/routers/agent_report.py
+    · ScheduleReport / RescheduleReport / ImportReport에 report_id 추가
+    · schedule / reschedule / import 진입 시 report_id로 기존 report_message 조회
+      → 있으면 새 행 생성 없이 {"report_id":..., "received": true} 즉시 응답 (idempotent)
+    · 신규 처리 시 record_channel_message에 source_report_id 전달, 응답에 report_id/received echo
+  - backend/routers/collected.py
+    · CollectedReleaseIn에 report_id 처리 추가
+    · report_id로 기존 report_message 조회 → payload의 _collected_release_id로
+      기존 CollectedRelease 행을 찾아 그대로 반환 (중복 행 생성 안 함)
+    · 신규 처리 시 payload에 _collected_release_id 기록, source_report_id 전달
+    · 응답에 report_id/received echo
+  - 검증
+    · python -m compileall backend 통과
+    · TestClient로 /api/agent-report/import, /api/collected-release 동일 report_id
+      2회 호출 → 두 번째 호출도 200 응답하지만 DB 행은 1건만 생성됨을 확인 후 테스트 데이터 정리
+========================================
+
+----------------------------------------
+[2026-06-11] 수출 보고(collected-release) 묶음 요약 필드 누락 + summary 단일건 기준 문제
+지시: 라벨 수출 보고(POST /api/collected-release)에서 "묶음(전체 수출) 요약 정보"가
+  플랫폼 채팅/저장 데이터에 제대로 반영되도록 schemas.py / collected.py를 수정할 것
+
+배경:
+  - W2WPM10GY 수출 보고(납기 2026-06-14 묶음, 30건 26,740장) 비교 결과:
+    · 라벨 쪽 채팅(라벨이 만든 payload)에는
+      ai_report.summary = "라벨회사 DB 판단: 납기 2026-06-14 묶음 완료 30건 26,740장.
+      수출 묶음 26.74kg / 30박스" 등 묶음 요약이 정상 포함됨
+    · 플랫폼 쪽 채팅(report_message.payload_json)에는 ai_report,
+      shipment_box_count_total, shipment_total_weight_kg, report_batch_due_date,
+      completed_release_qty_total, pending_material_order_snapshot,
+      pending_material_order_count, stock_snapshot 가 전부 빠져있음
+  - 원인 1: CollectedReleaseIn(schemas.py)에 위 필드들이 선언돼 있지 않아서,
+    FastAPI/Pydantic이 수신 시 스키마에 없는 필드를 기본값(extra=ignore)으로 조용히 버림
+    (참고: [2026-06-10] "라벨사 플랫폼 연동 기준 문서화" 항목에서 이미 이 필드들을
+     "수출 보고 핵심 필드"로 문서화했었지만, 실제 스키마 반영은 안 돼 있었음)
+  - 원인 2: receive_release()의 channel summary가 "이번 1건" 단일 필드
+    (item_name=바지, label_code=W2WPM10GY 1개, quantity=1000, box_count=1,
+    product_weight_kg=1)만 사용해서, 화면에 "품목 바지, 1kg, 1박스"처럼 단일건
+    기준으로만 보임 (실제로는 20개 품목 / 30건 / 26.74kg / 30박스 묶음)
+  - completed_release_count(=30), completed_release_total_weight_kg(=26.74)는
+    스키마에 있어서 payload엔 남아있지만 summary 텍스트에 반영이 안 돼
+    "26kg인데 1박스"처럼 모순돼 보임
+
+1) CollectedReleaseIn에 누락 필드 추가
+  - ai_report: Optional[Any] = None
+  - shipment_box_count_total: Optional[int] = None
+  - shipment_total_weight_kg: Optional[float] = None
+  - report_batch_due_date: Optional[date] = None
+  - completed_release_qty_total: Optional[int] = None
+  - pending_material_order_snapshot: Optional[Any] = None
+  - pending_material_order_count: Optional[int] = None
+  - stock_snapshot: Optional[Any] = None
+
+2) receive_release()의 summary를 "묶음" 기준으로 재작성
+  - body.ai_report가 dict이고 "summary" 키가 있으면 그 문자열을 channel summary로 우선 사용
+  - 없으면 completed_release_count / completed_release_qty_total /
+    (shipment_total_weight_kg 또는 completed_release_total_weight_kg) /
+    shipment_box_count_total 로 "수출 묶음 N건 M장 (Xkg, Y박스)" 형태로 조합
+  - 기존 "품목 OOO, 수량 OOO, 납기 OOO" 단일건 정보는 묶음 요약 뒤에
+    부가 정보로 덧붙이는 정도로 유지 (예: ". 대표 품목 {item_name}({label_code})")
+
+3) (검토) CollectedRelease 테이블에 묶음 요약 컬럼 추가 여부
+  - shipment_total_weight_kg / shipment_box_count_total / completed_release_count 등을
+    별도 컬럼으로 저장해서 출고 목록 화면에서도 묶음 단위로 조회 가능하게 할지 검토
+
+대상 파일:
+  - backend/schemas.py (CollectedReleaseIn 필드 추가)
+  - backend/routers/collected.py (receive_release summary 로직 수정)
+  - backend/models.py / backend/init_db.py (3번 진행 시 CollectedRelease 컬럼 추가)
+
+결과: [2026-06-11] 완료
+  - backend/schemas.py
+    · CollectedReleaseIn에 누락 필드 추가
+      - completed_release_qty_total, shipment_total_weight_kg, shipment_box_count_total
+      - report_batch_due_date, pending_material_order_snapshot, pending_material_order_count
+      - stock_snapshot, ai_report
+    · model_dump(payload)에 자동 포함되어 report_message.payload_json에 그대로 저장됨
+  - backend/routers/collected.py
+    · _format_number / _format_weight 헬퍼 추가 (천단위 콤마, kg 표기)
+    · _build_release_summary() 추가
+      - body.ai_report.summary가 있으면 그 문자열을 채널 summary로 우선 사용
+      - 없으면 completed_release_count / completed_release_qty_total /
+        (shipment_total_weight_kg 또는 completed_release_total_weight_kg) /
+        shipment_box_count_total 로 "수출 묶음 N건 M장 (Xkg, Y박스). 대표 품목 OOO(라벨코드)" 조합
+      - 묶음 정보가 전혀 없으면 기존 "품목 OOO, 수량 OOO, 납기 OOO" 단일건 summary 유지(하위호환)
+    · receive_release()의 record_channel_message summary를 _build_release_summary() 결과로 교체
+  - 3) CollectedRelease 묶음 요약 컬럼 추가 (검토)
+    · 보류 — payload_json에 묶음 요약 필드가 모두 보존되므로 현재는 컬럼 추가 불필요.
+      추후 출고 목록 화면에서 묶음 단위 조회/필터가 필요해지면 재검토
+  - 검증
+    · python -m compileall backend 통과
+    · TestClient로 /api/collected-release 3가지 케이스 확인 후 테스트 데이터 정리
+      1) ai_report.summary 있음 → 그 문자열 그대로 채널 summary 사용 확인
+         (payload에 ai_report/shipment_total_weight_kg/shipment_box_count_total/
+          report_batch_due_date/completed_release_qty_total/
+          pending_material_order_snapshot/pending_material_order_count/stock_snapshot
+          모두 저장됨 확인)
+      2) ai_report 없이 묶음 필드만 있음 →
+         "수출 묶음 5건 4,200장 (12.50kg, 6박스). 대표 품목 바지(TESTSUM02)" 형태로 생성됨 확인
+      3) 묶음 필드 전혀 없음(옷감사 단일건) →
+         기존 "옷감사 출고 보고 수신. 품목 면원단, 수량 200.0 yard, 납기 2026-06-22" 형태 유지 확인
+========================================
+
+----------------------------------------
+[2026-06-11] 1:1 보고 채널(collected_release)에 같은 묶음이 여러 건 중복 표시되는 문제
+지시: 라벨이 같은 납기 묶음(report_batch_due_date)을 출고 완료될 때마다
+  누적 재전송하면서 채널에 "40건/39건/38건/..." 식으로 같은 묶음의 스냅샷이
+  전부 별도 메시지로 쌓임 → 최신(최대 건수) 1건만 남기고 나머지는 숨길 것
+
+배경:
+  - report_message(channel='label', event_type='collected_release')에
+    report_batch_due_date='2026-06-14'인 행이 id=24,30~40까지 11건 존재
+    (completed_release_count = 30,31,32,...,40 순으로 누적)
+  - [2026-06-11] "채팅방 최근날짜가 위로" 수정으로 newest-first 정렬이 되면서
+    이 11건이 40,39,38,...순으로 그대로 한 채널에 쭉 나열되어 사용자가
+    "40건 하나만 있으면 되는데 39건/38건/... 도 같이 내려온다"고 지적
+
+원인:
+  - report_channels.py list_report_channel_messages()가 report_message를
+    그대로 반환 — 같은 묶음(due_date)의 여러 스냅샷을 묶어서 최신 1건만
+    남기는 로직이 없음
+  - 라벨agent 쪽에는 이미 동일한 목적의 _release_batch_key() /
+    _dedupe_message_rows()(services/platform_report_state.py)가 있어서
+    라벨 쪽 화면(PlatformReportTab)은 묶음당 1건만 보임 — 플랫폼 쪽에는
+    이 디듀프 로직이 없었음
+
+수정:
+  - backend/services/report_message.py
+    · _release_batch_key(payload): payload.report_batch_due_date →
+      payload.due_date → payload.label_code 순으로 묶음 키 추출
+      (라벨agent의 _release_batch_key()와 동일한 우선순위)
+    · dedupe_release_channel_messages(records): event_type이
+      'collected_release'인 행만 대상으로, newest-first로 정렬된 records를
+      순회하며 batch_key가 이미 등장했으면 skip (오래된 스냅샷 제거),
+      처음 등장한(=가장 최신) 1건만 유지. collected_release가 아닌 행은
+      그대로 통과
+  - backend/routers/report_channels.py
+    · list_report_channel_messages()에서 query 결과(records)에
+      dedupe_release_channel_messages() 적용 후 응답 생성
+
+검증:
+  - python -m compileall backend 통과
+  - GET /api/report-channels/label/messages?limit=50 호출 결과:
+    · 수정 전: collected_release 11건(id 24,30~40, 30건~40건 전부) 노출
+    · 수정 후: collected_release 2건만 노출
+      - id=40 (W2MTC08RD, report_batch_due_date=2026-06-14, count=40) ← 최신
+      - id=23 (W1WTC01BK, due_date=2026-06-12, 별개 묶음) ← 다른 묶음이라 유지
+    · id=24,30~39 (같은 2026-06-14 묶음의 30~39건 스냅샷)는 정상적으로 제외됨
+========================================
+
+----------------------------------------
+[2026-06-11] 라벨agent 패킹리스트(CSV) 수신 → DB 저장
+지시: 라벨회사가 보내는 패킹리스트 CSV(collected_release payload의
+  packing_list.csv_base64)를 받아서 플랫폼 DB에 저장할 것
+
+배경:
+  - 라벨agent는 출고 보고(POST /api/collected-release) payload에
+    packing_list 객체(filename, period_from/to, total_qty,
+    total_weight_kg, label_code_count, content_type, csv_base64,
+    csv_size_bytes)를 이미 포함해서 전송 중 (services/packing_list.py
+    build_packing_list_package())
+  - 지금까지는 CollectedReleaseIn.packing_list 필드로 받아 report_message.
+    payload_json에만 통째로 보존되고, 별도 테이블/다운로드 경로는 없었음
+
+수정:
+  - backend/models.py
+    · PackingList 모델 추가 (테이블: packing_list)
+      - collected_release_id(FK), company_id(FK), label_code,
+        report_batch_due_date, filename, content_type,
+        period_from/period_to, total_qty, total_weight_kg,
+        label_code_count, csv_content(TEXT, base64 디코딩된 원문),
+        created_at, updated_at
+    · Base.metadata.create_all()로 --reload 시 자동 테이블 생성 확인됨
+      (별도 마이그레이션 스크립트 불필요)
+  - backend/schemas.py
+    · PackingListOut 추가
+  - backend/routers/collected.py
+    · _parse_date(value): 문자열/-date를 date로 정규화
+    · _save_packing_list(db, body, record, company_id):
+      - body.packing_list.csv_base64를 디코딩해 csv_content로 저장
+      - report_batch_due_date(없으면 due_date, 그것도 없으면 label_code)를
+        키로 같은 묶음의 기존 PackingList 행을 찾아 UPSERT
+        (라벨이 같은 묶음을 30건→40건으로 누적 재전송할 때마다
+        패킹리스트 CSV가 별도 행으로 쌓이지 않고 최신 1건으로 갱신됨 —
+        위 1:1 채널 디듀프와 동일한 사상)
+      - packing_list나 csv_base64가 없으면 아무 것도 하지 않음(하위호환)
+    · receive_release()에서 record 커밋 직후 _save_packing_list() 호출
+  - backend/routers/packing_list.py (신규)
+    · GET /api/packing-lists/?label_code=&company_id= → 목록 조회
+    · GET /api/packing-lists/{id}/download → CSV 파일 다운로드
+      (Content-Disposition: attachment)
+  - backend/main.py
+    · packing_list 라우터 등록
+
+검증:
+  - python -m compileall backend 통과
+  - --reload 후 DESCRIBE packing_list로 테이블 자동 생성 확인
+  - POST /api/collected-release (packing_list.csv_base64 포함, 1번째 묶음
+    스냅샷: W2TESTPK1, report_batch_due_date=2026-06-20, total_qty=100)
+    → packing_list에 id=1 행 생성, GET .../1/download로 원본 CSV 그대로
+    받아짐 확인
+  - 같은 묶음의 2번째 스냅샷(W2TESTPK2, total_qty=250, label_code_count=2)
+    재전송 → packing_list 행 개수 그대로 1개 유지, id=1 내용만 최신으로
+    갱신됨(UPSERT) 확인
+  - 테스트 데이터(W2TESTPK1/W2TESTPK2 관련 packing_list/report_message/
+    collected_release 행) 정리 완료
+========================================
+
+----------------------------------------
+[2026-06-11] 플랫폼 채팅창 패킹리스트 첨부 확인/다운로드 + DB 저장 지시
+지시: 라벨회사가 출고완료 보고와 함께 보내는 packing_list CSV를 플랫폼 채팅창에서
+  첨부파일처럼 확인하고 다운로드할 수 있게 만들 것. 동시에 수신 즉시 플랫폼 DB의
+  packing_list 테이블에 저장되도록 보장할 것.
+
+작업 방향:
+  - POST /api/collected-release 수신 시 body.packing_list가 있으면 report_message.payload_json에만
+    남기지 말고, 반드시 packing_list DB 테이블에도 저장한다.
+  - packing_list.csv_base64를 디코딩해 csv_content 원문으로 보관한다.
+  - 같은 회사/같은 report_batch_due_date 묶음으로 다시 들어오는 패킹리스트는 중복 생성하지 말고
+    최신 CSV로 갱신한다.
+  - 플랫폼-라벨 1:1 보고 채널에서 collected_release 메시지에 packing_list가 있으면
+    "패킹리스트 CSV" 첨부 카드 또는 다운로드 버튼을 노출한다.
+  - 사용자가 채팅창에서 다운로드 버튼을 누르면 플랫폼 DB에 저장된 packing_list CSV를 내려받아
+    실제 파일 내용을 확인할 수 있어야 한다.
+  - 채팅창에 raw payload만 보여주는 수준에서 끝내지 말고, 사용자가 바로 알아볼 수 있는
+    파일명/총수량/총중량/품목수/다운로드 액션을 표시한다.
+
+확인 기준:
+  - 라벨agent가 packing_list 포함 출고완료 보고를 보내면 플랫폼 DB packing_list에 행이 생긴다.
+  - 플랫폼 보고 채널 UI에서 해당 메시지에 패킹리스트 첨부가 보인다.
+  - 다운로드한 CSV 내용이 라벨agent가 보낸 csv_base64 원문과 일치한다.
+  - packing_list가 없는 다른 회사/기존 payload는 오류 없이 기존처럼 표시된다.
+
+결과: [2026-06-11] 완료
+  - backend/routers/collected.py
+    · _save_packing_list() 보강
+      - csv_base64 뿐 아니라 pdf_base64도 수용
+      - text/csv는 디코딩한 원문 텍스트 저장
+      - application/pdf 등 텍스트 외 파일은 base64 원문 저장 후 다운로드 시 복원
+    · _attach_packing_list_metadata() 추가
+      - report_message.payload_json의 packing_list에서 csv_base64/pdf_base64 제거
+      - packing_list_id / download_url / packing_list_download_url 주입
+      - 채팅 payload가 첨부 메타 중심으로 가볍게 유지되도록 정리
+  - backend/routers/packing_list.py
+    · GET /api/packing-lists/{id}/download 보강
+      - text/*는 UTF-8 bytes로 다운로드
+      - 그 외 파일은 저장된 base64를 복원해 다운로드
+  - frontend/src/api.js
+    · getPackingListDownloadUrl() 추가
+  - frontend/src/components/tabs/ReportChannelsTab.jsx
+    · collected_release 메시지에 패킹리스트 첨부 카드 추가
+      - 파일명
+      - 기간
+      - 총수량 / 총중량 / 품목수
+      - CSV 다운로드 버튼
+    · collected_release 요약 문구 우선순위 조정
+      - ai_report.summary 우선
+      - 없으면 묶음 건수/수량/중량/박스 기준 요약
+      - 기존 단일 품목 요약은 최후 fallback
+  - 기존 데이터 백필
+    · 기존 report_message.payload_json 안의 packing_list를 스캔해서
+      packing_list 테이블에 1건 업서트
+    · 기존 메시지 payload에도 packing_list_id / download_url 반영
+    · 현재 저장된 묶음 예시:
+      - packing_list id=3
+      - label_code=W2MTC08RD
+      - report_batch_due_date=2026-06-14
+      - filename=packing_list_2026-06-14_2026-06-14.pdf
+  - 검증
+    · python -m compileall backend 통과
+    · npm run build 통과
+    · TestClient로 /api/collected-release (csv_base64 포함) 호출
+      → report_message.payload_json에 packing_list_id/download_url 저장 확인
+      → GET /api/packing-lists/{id}/download 응답 본문이 원본 CSV bytes와 일치 확인
+      → 테스트 데이터 정리 완료
 ========================================
