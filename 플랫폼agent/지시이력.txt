@@ -723,3 +723,356 @@
       → GET /api/packing-lists/{id}/download 응답 본문이 원본 CSV bytes와 일치 확인
       → 테스트 데이터 정리 완료
 ========================================
+
+----------------------------------------
+[2026-06-12 11:39] 물류 기사정보 직접수신 위치 안내
+지시: 물류agent가 기사/차량 정보를 플랫폼agent로 직접 전송하므로,
+      플랫폼 세션은 아래 수신 위치와 저장 위치를 기준으로 후속 작업을 진행할 것
+
+결과:
+  - 물류 송신 주소:
+    · POST http://localhost:8000/api/logistics/drivers/sync
+  - 플랫폼 수신 라우터:
+    · backend/routers/logistics_sync.py
+    · 엔드포인트: POST /api/logistics/drivers/sync
+  - 플랫폼 저장 위치:
+    · backend/models.py
+    · LogisticsDriverCache 테이블(logistics_driver_cache)
+  - 플랫폼 세션 작업 기준:
+    · 기사 목록/상태/차량 정보는 logistics_driver_cache 에서 읽을 것
+    · 화면이나 AI 판단에 필요하면 이 테이블 조회 API를 추가해서 사용할 것
+    · 물류agent가 push하는 구조이므로 플랫폼이 물류 DB를 직접 읽지 말 것
+  - 물류agent 보냄
+========================================
+
+----------------------------------------
+[2026-06-12 12:05] 배차현황 탭 기준 플랫폼 내부 배차판단 서비스 분리
+지시: 배차현황 페이지에서 물류 기사정보를 보고 플랫폼이 직접 매칭 판단하도록 구조를 정리할 것.
+      단, 물류 DB/API를 직접 읽는 방식이 아니라 물류agent가 push한 기사/차량 스냅샷과
+      라벨agent가 보낸 수입/수출 보고를 플랫폼 내부 계산 서비스가 읽어 판단하게 만들 것.
+
+결과:
+  - 플랫폼 내부 계산 레이어 분리
+    · backend/services/dispatch_planner.py 신규
+    · 역할:
+      - logistics_driver_cache 기반 가용 기사/차량 후보 선정
+      - 출발회사 주소 + 도착항 기준 픽업일 계산
+      - 라벨 수입 보고(agent_report_import) 기준 같은 항구 귀로 회수 가능 여부 판단
+  - 플랫폼 ↔ 물류 브리지 역할 정리
+    · backend/services/logistics_bridge.py 전면 수정
+    · 기존:
+      - 플랫폼이 물류 /api/drivers, /api/vehicles, /api/ai/dispatch 를 직접 호출
+      - 실질 배차 판단이 물류 쪽 자동배차 API에 남아 있었음
+    · 변경:
+      - 플랫폼은 /api/platform/signal 로 delivery 생성만 요청
+      - 이후 dispatch_planner 결과(driver_id, vehicle_id, pickup_date, empty_return)를
+        물류 /api/deliveries/{id}/assign 으로 전달
+      - 채팅 로그에는 platform_signal + dispatch_planned + dispatch_confirmed 흐름 기록
+  - 기사 스냅샷 저장 컬럼 확장
+    · backend/models.py LogisticsDriverCache:
+      - location_gu
+      - base_region
+      - vehicle_id
+      - vehicle_max_weight
+    · backend/routers/logistics_sync.py 에서 위 필드 저장
+    · backend/init_db.py 에 logistics_driver_cache 컬럼 자동 추가 로직 반영
+  - 배차현황 API/화면 개선
+    · GET /api/dispatch/availability 가 물류 라이브 API가 아니라 logistics_driver_cache 기준으로 응답
+    · 응답 필드:
+      - total_driver_count
+      - available_driver_count
+      - available_vehicle_count
+      - last_synced_at
+      - 기사별 위치/차량/적재량/현재배차 정보
+    · frontend/src/components/tabs/DispatchTab.jsx:
+      - "동기화 기사 / 가용 기사 / 가용 차량 / 배차 확정" 카드 추가
+      - 기사 스냅샷 카드에 위치, 차량번호, 차량종류, 적재량, 기사ID/차량ID 표시
+      - 문구를 "플랫폼이 라벨 완료 보고와 물류 기사 스냅샷을 종합 판단" 기준으로 정리
+  - 물류 assign API 하위호환 보강
+    · 물류agent/backend/routers/deliveries.py
+    · PUT /deliveries/{id}/assign 가 empty_return 파라미터를 받으면
+      물류 내부 round_trip 재계산 대신 플랫폼 판단값을 그대로 저장
+
+검증:
+  - python -m compileall 플랫폼agent/backend 통과
+  - python -m compileall 물류agent/backend 통과
+  - 플랫폼 frontend npm run build 통과
+  - python init_db.py 실행으로 logistics_driver_cache 신규 컬럼 DB 반영 완료
+  - GET http://localhost:8000/api/dispatch/availability 확인:
+    · total_driver_count=30
+    · available_driver_count=26
+    · available_vehicle_count=26
+    · last_synced_at 반환 정상
+  - 현재 확인된 후속 필요사항:
+    · 기존 캐시 데이터는 vehicle_plate 는 있으나 vehicle_id / vehicle_max_weight 가 비어 있음
+    · 플랫폼은 vehicle_id 없을 때 vehicle_plate fallback 으로 배차 assign 시도하도록 보강
+    · vehicle_max_weight 는 다음 물류agent 재동기화 후 들어오면 적재량 기준 배차 판단까지 함께 고도화됨
+    · 물류agent 서버(localhost:8004)는 점검 시 응답하지 않아 강제 재동기화 호출은 실패
+========================================
+
+----------------------------------------
+[2026-06-12 12:25] 라벨 채팅 기반 실제 배차 1건 실행
+지시: 라벨agent 채팅창에 이미 올라온 최신 수출 보고와 현재 물류 기사 스냅샷을 사용해
+      배차를 실제로 한 번 수행하고, 배차현황 페이지가 읽는 데이터까지 확인할 것
+
+결과:
+  - 사전 확인
+    · 플랫폼 /api/report-channels/label/messages 에 최신 라벨 수출 묶음 존재 확인
+      - 대표 코드: W2MTC08RD
+      - 납기: 2026-06-14
+      - 수출항: 부산항
+      - 총중량: 32.758kg
+    · 당시 dispatch 테이블은 0건이라 페이지에 매칭 대상이 없었음
+  - 배차 대상 생성
+    · 최신 라벨 collected_release 묶음 payload 기준으로 dispatch id=1 생성
+    · company_id=2(케어라벨사), destination=부산항, weight_kg=32.8, due_date=2026-06-14
+  - 물류 반영 오류 수정
+    · 첫 배차 시도에서 물류 /deliveries/{id}/assign 가 500
+    · 원인: 물류 delivery.empty_return 컬럼 길이 VARCHAR(20) 부족
+    · 물류agent/backend/models.py: empty_return VARCHAR(100) 로 확대
+    · 물류agent/backend/database.py: delivery.empty_return 컬럼 자동 ALTER 로직 추가
+    · 물류 서버 재시작 후 기사 스냅샷 재동기화 수행
+  - 기사 스냅샷 재동기화
+    · POST http://localhost:8004/api/platform/drivers/sync 호출 성공
+    · 플랫폼 /api/dispatch/availability 기준:
+      - total_driver_count=30
+      - available_driver_count=26
+      - available_vehicle_count=26
+      - vehicle_id / vehicle_max_weight / location_gu / base_region 반영 확인
+  - 실제 배차 실행
+    · POST http://localhost:8000/api/dispatch/1/match 재실행
+    · 최종 플랫폼 DB 저장값 확인:
+      - dispatch id=1
+      - status=배차완료
+      - driver_name=신동엽
+      - logistics_driver_id=16
+      - vehicle_plate=77타 9012
+      - logistics_vehicle_id=16
+      - pickup_date=2026-06-12
+      - logistics_delivery_id=1
+      - logistics_message="플랫폼 판단: 신동엽 배정 / 서울시 구로구 / 차량 77타 9012 / 픽업 2026-06-12 / 귀로 회수건 없음"
+    · 물류 DB delivery id=1 에도 driver_id=16, vehicle_id=16, vehicle_plate=77타 9012 반영 확인
+  - 배차현황 페이지 기준 확인값
+    · GET /api/dispatch 최종 응답:
+      - 라벨코드 W2MTC08RD
+      - 출발회사 케어라벨사
+      - 도착지 부산항
+      - 기사 신동엽
+      - 차량 77타 9012
+      - 픽업예정일 2026-06-12
+      - 상태 배차완료
+    · GET /api/dispatch/availability 응답도 정상이라 DispatchTab 이 읽는 데이터 준비 완료
+  - 브라우저 확인 관련
+    · Codex 세션의 in-app browser(iab) 연결은 현재 비활성이라 직접 클릭 검증은 불가
+    · 대신 배차 페이지가 실제로 읽는 API(/api/dispatch, /api/dispatch/availability)와 DB 저장값까지 최종 검증 완료
+
+----------------------------------------
+[2026-06-15] 7월 시연용 생산/물류 데이터 매칭 지시
+지시: 라벨agent/옷감agent/지퍼단추agent가 2026년 7월 매주 1회 출고하는 가짜 데이터를 보내고,
+  물류agent가 기사/차량 스냅샷을 보내면 플랫폼이 이를 저장한 뒤 내부 판단 서비스에서
+  배차 매칭을 수행하도록 할 것.
+
+공통 7월 출고 주차:
+  - 1주차: 2026-07-03
+  - 2주차: 2026-07-10
+  - 3주차: 2026-07-17
+  - 4주차: 2026-07-24
+  - 5주차: 2026-07-31
+
+플랫폼agent 처리 기준:
+  - 생산회사 보고와 물류 기사 스냅샷을 모두 DB에 먼저 저장한다.
+  - 라벨 보고 수신 즉시 물류로 직접 전송하지 않는다.
+  - dispatch_planner 또는 orchestration_service 같은 내부 판단 레이어가 저장된 데이터를 읽어 판단한다.
+  - 같은 출고묶음은 report_id, report_batch_due_date, label_code 등을 기준으로 중복 배차를 방지한다.
+  - 기사 스냅샷은 last_synced_at이 오래된 경우 배차 후보에서 제외한다.
+  - vehicle_max_weight 기준으로 중량 초과 차량을 제외한다.
+  - 귀로 가능 기사와 납기 임박 건이 보이도록 판단 사유(reason/decision_log)를 남긴다.
+  - logistics_bridge는 판단 결과를 물류agent API로 전달하는 역할만 맡는다.
+  - 플랫폼-물류 채팅창에는 계산 과정 전체가 아니라 배차요청/배차확정/귀로판단결과만 보고 형태로 표시한다.
+
+결과: 작업 지시 등록
+========================================
+
+----------------------------------------
+[2026-06-15] 분석 페이지와 AI 인사이트 영역 분리 지시
+지시: 플랫폼의 분석/인사이트 기능을 하나로 섞지 말고, "분석" 영역과
+  "AI 인사이트" 영역으로 분리해서 설계할 것.
+
+1) 분석 영역
+  목적:
+    - 생산회사 agent들이 플랫폼에 보고한 데이터를 기준으로 객관적인 숫자/표/그래프를 보여준다.
+    - AI가 바로 결론을 말하기 전에, 어떤 데이터 근거가 있는지 사람이 확인할 수 있게 한다.
+
+  생산사에서 넘어오는 핵심 정보:
+    - 자재 발주일
+    - 자재 납기일
+    - 실제 자재 입고일 또는 입고예정일
+    - 자재 공급회사
+    - 가공품 생산시작일
+    - 가공품 생산완료일
+    - 가공품 납기일
+    - 생산품 내용
+      · 패킹리스트에서 수량, 박스수, 중량, 품목 구성 확보 가능
+    - 라벨/의상 정보
+      · 라벨코드에서 계절, 성별, 원단, 옷종류, 스타일/색상 계열 확보 가능
+
+  분석해야 할 대표 지표:
+    - 자재 입고 지연일 = 실제 입고일 - 자재 납기일
+    - 자재 리드타임 = 실제 입고일 - 자재 발주일
+    - 공급사별 평균 지연일
+    - 공급사별 납기 준수율
+    - 생산 소요시간 = 생산완료일 - 생산시작일
+    - 생산 납기 여유일 = 생산 납기일 - 생산완료일
+    - 생산 납기 압박도
+      · 시간이 갈수록 생산완료일이 납기일에 가까워지는지 확인
+    - 품목/의류군별 반복 병목
+      · 계절/성별/원단/옷종류 기준으로 반복 지연이나 생산시간 증가 확인
+
+  분석 화면 필터:
+    - 기간 프리셋: 1개월 / 3개월 / 6개월 / 1년 / 전체
+    - 직접 선택: 달력으로 시작일~종료일 선택
+    - 분석 대상: 전체 / 공급사 / 생산사 / 자재 / 품목군 / 물류
+    - 분석 유형: 자재 납기 / 생산 납기 / 공급사 비교 / 생산성 리스크 / 시즌성
+
+2) AI 인사이트 영역
+  목적:
+    - 분석 영역에서 계산된 숫자와 근거를 바탕으로 생산기업에게 실행 가능한 솔루션을 제안한다.
+    - 이 영역에 외부 AI 에이전트 연동을 검토한다.
+
+  AI가 생성할 인사이트 예시:
+    - 자재 공급 날짜가 들쭉날쭉하고 평균 지연일이 크면
+      "해당 자재 공급회사 변경 또는 대체 공급사 테스트 발주를 권장"
+    - 생산완료일이 납기일 대비 점점 빡빡해지면
+      "생산성 저하, 기계 배정 병목, 선제 생산 필요 가능성" 제안
+    - 특정 의류군/계절상품에서 반복 병목이 보이면
+      "시즌 전 선발주 또는 생산라인 사전 확보" 제안
+    - 특정 물류/지역에서 지연이 반복되면
+      "플랫폼 연동 물류 또는 다른 배차 전략 사용" 제안
+
+  AI 인사이트 세팅 지시:
+    - 외부 AI 에이전트 설치/실행 가능 여부를 확인한다.
+    - 플랫폼agent 내부에 AI 호출용 adapter 계층을 준비한다.
+      예: backend/services/ai_insight_adapter.py
+    - API 키, 설정 파일, 로컬 메모리 파일은 GitHub에 커밋하지 않는다.
+    - AI 호출 실패 시 기존 OpenAI 기반 인사이트 또는 규칙 기반 문구로 fallback한다.
+    - AI 에이전트는 분석 결과를 해석하는 보조 에이전트이며, 플랫폼 DB나 배차 결과를 직접 수정하지 않는다.
+    - 사용자의 채택/보류/무시 피드백은 플랫폼 DB에 저장하고, 다음 AI 인사이트 생성 시 참고 정보로 전달한다.
+
+결과: 작업 지시 등록
+========================================
+
+----------------------------------------
+[2026-06-15] (라벨agent 작성) 위 7월 시연 생산/물류 매칭 지시 참고 안내
+공유 배경: 라벨agent가 2026년 7월 5개 주차(07-03/10/17/24/31) 출고완료 보고를 먼저
+  생성/전송하는 작업을 완료했다. 플랫폼agent의 배차 매칭 판단 로직 설계 시 참고할 수
+  있도록 실제 생성된 데이터를 공유한다. (코드/DB는 변경하지 않음 - 안내 메모만 기록)
+
+라벨agent 출고 보고 현황 (label_platform_report_event, report_type="release"):
+  - 5개 report_batch_due_date: 2026-07-03 / 07-10 / 07-17 / 07-24 / 07-31
+    각 묶음 completed_release_count=6, label_code 6종(W1MTP05BE, W2WTL06WH, W2WPL07BE,
+    W2MTC08RD, W2MPL09NV, W2WPM10GY) 동일 - 옷감/지퍼단추도 같은 묶음 기준으로
+    보고를 보내면 같은 주차에 묶여 보인다.
+  - 07-03: qty 6,000 / 6.0kg / box 6 (정상)
+  - 07-10: qty 6,000 / 6.0kg / box 6 (release_date=due_date, 납기 당일 출고)
+  - 07-17: qty 1,200 / 1.2kg / box 6 (가장 가벼움 - 귀로 가능 케이스)
+  - 07-24: qty 72,000 / 72.0kg / box 12 (가장 무거움 - 소형차 제외 케이스)
+  - 07-31: qty 6,000 / 6.0kg / box 6 - 동일 payload를 2회 전송(report id 쌍)하여
+    같은 report_batch_due_date를 가진 중복 보고 케이스를 만들어 둠
+    → "같은 출고묶음은 report_id, report_batch_due_date, label_code 등을 기준으로
+       중복 배차 방지" 요구사항을 이 데이터로 바로 검증 가능
+  - 플랫폼agent가 미기동 상태에서 만들어졌기 때문에 위 6건 보고는 모두
+    status="플랫폼 보고 대기"로 라벨agent DB에 남아 있다. 플랫폼agent가 기동되면
+    라벨agent에서 재전송하거나, 플랫폼agent 쪽에서 직접 동일 payload로 시드해야 한다.
+
+결과: 참고 안내 작성 (플랫폼agent 실제 구현은 별도 세션에서 진행 필요)
+========================================
+
+----------------------------------------
+[2026-06-15] AI 인사이트 에이전트 연동 PoC 지시
+지시: 포트폴리오에서 "외부 AI Agent 프레임워크 연동 경험"을 보여주기 위해,
+  외부 AI 에이전트를 플랫폼agent 인사이트 기능에 보조 에이전트로
+  연동하는 PoC를 검토/구현할 것.
+
+연동 방향:
+  - AI 에이전트를 플랫폼 핵심 업무 흐름에 직접 넣지 않는다.
+  - 생산사 보고 수신, dispatch_planner 배차 판단, 물류agent API 전송은 기존 플랫폼 로직이 계속 담당한다.
+  - AI 에이전트는 "인사이트 생성 보조 에이전트"로만 사용한다.
+  - 분석 페이지의 숫자/표/그래프는 기존 백엔드 통계 레이어가 계산한다.
+  - AI 에이전트는 계산된 분석 결과, 과거 인사이트, 사용자 피드백을 받아
+    생산기업용 개선 제안 문장/리포트를 생성하는 역할을 맡는다.
+
+PoC 범위:
+  - 외부 AI 에이전트 설치/실행 가능 여부 확인
+  - 플랫폼agent에서 AI를 호출하는 adapter 계층 추가 검토
+    예: services/ai_insight_adapter.py
+  - AI 호출 실패 시 기존 OpenAI 기반 insight 생성으로 fallback 처리
+  - AI 응답은 바로 업무 DB를 수정하지 않고, insight draft로만 저장한다.
+  - 사용자가 "채택/보류/무시" 피드백을 남기면 플랫폼 DB에 저장하고,
+    다음 AI 인사이트 요청 시 참고 정보로 전달한다.
+
+AI 기반 Insight Agent 개념:
+  - Memory: 과거 인사이트와 사용자 피드백 저장
+  - Skill: 공급사 지연 분석, 물류 성과 분석, 시즌성 분석, 대체업체 추천 같은 분석 유형 분리
+  - Feedback Loop: 채택/보류/무시 결과를 다음 추천 톤과 우선순위에 반영
+
+주의:
+  - 외부 AI 에이전트를 붙이더라도 프로젝트의 핵심 오케스트레이션을 AI에 위임하지 않는다.
+  - AI 에이전트는 포트폴리오상 "외부 AI Agent 프레임워크 연동"과 "자가개선형 인사이트 컨셉"을 보여주는 보조 계층이다.
+  - API 키, 설정 파일, 로컬 메모리 파일은 GitHub에 커밋하지 않는다.
+  - 설치/운영 복잡도가 크면 1차는 mock adapter로 인터페이스만 고정하고, 실제 AI 실행은 2차로 진행한다.
+
+결과: 작업 지시 등록
+========================================
+
+----------------------------------------
+[2026-06-16] 플랫폼 Q&A 인사이트 엔드포인트 추가 (SQL-based RAG)
+지시: 사용자가 자연어로 회사 상태를 질문하면, 플랫폼 DB에 쌓인 보고 데이터를
+  회사·주제 기반으로 조회해서 GPT가 분석 답변을 생성하는 엔드포인트를 추가할 것
+
+배경:
+  - 플랫폼 DB에는 이미 report_message(전체 보고 이력), collected_release(출고 이력),
+    agent_report(스케줄/자재입고/재조정), InsightLog, 4년치 demo CSV가 쌓여 있음
+  - 사용자가 "라벨회사 생산성이 어떠냐?"처럼 질문하면, 관련 데이터를 검색해서
+    GPT가 "1~2년차 대비 납기일·완료일 격차 축소 → 생산성 하락 / 원인: 자재입고 지연" 같은
+    분석 답변을 반환하는 구조
+  - 진짜 벡터 RAG까지 갈 필요 없이, 회사명·주제 키워드 → SQL 조회 → GPT 분석 방식으로
+    포트폴리오 수준에서 충분한 효과를 낼 수 있음
+
+구현 방향:
+
+1) POST /api/insights/query 엔드포인트 신설
+   - 요청: { "question": "라벨회사 생산성이 어떠냐?" }
+   - 응답: { "question": ..., "answer": ..., "data_sources": [...], "related_companies": [...] }
+
+2) 회사명 + 주제 키워드 기반 SQL retrieval
+   회사명 매핑:
+     "라벨" / "케어라벨" → company_id=2
+     "옷감"             → company_id=1
+     "지퍼단추"         → company_id=3
+     "물류"             → company_id=4
+
+   주제 → 조회 대상 테이블/데이터:
+     "생산성" / "납기" → collected_release (due_date vs collected_at 비교)
+                         + agent_report type=schedule (start_at vs estimated_completion)
+                         + production_batches CSV (avg_production_due_buffer_days 추세)
+     "자재입고" / "원자재" → agent_report type=import
+                              + material_receipts CSV (입고 지연일 추세)
+     "물류" / "배차"  → dispatch 테이블 + logistics_performance CSV
+
+3) GPT 분석 프롬프트 구성
+   - 회사 이름, 질문, 조회된 데이터(JSON)를 함께 전달
+   - "1~2년차(정상 기준선) 대비 최근 수치가 어떻게 변했는가"를 비교 관점으로 분석 요청
+   - demo_data 4년치 요약(dataset_summary.json)도 컨텍스트로 첨부
+
+4) 프론트엔드 InsightTab에 질문창 추가
+   - 텍스트 입력 → POST /api/insights/query 호출
+   - 답변 카드 표시 (답변 본문 + 근거 데이터 출처 태그)
+   - 기존 InsightLog 목록 위 또는 별도 섹션으로 배치
+
+대상 파일:
+  - backend/routers/insights.py (POST /api/insights/query 추가)
+  - backend/services/ai_insight.py (query_insight 함수 추가)
+  - frontend/src/components/tabs/InsightTab.jsx (질문창 + 답변 카드 UI 추가)
+
+결과: 미완료
+========================================

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -20,19 +21,63 @@ COMPANIES = [
 
 MATERIALS = {
     "케어라벨사": [
-        ("라벨 원단", "m", "Apex Label Materials", "Stable Label Backup"),
+        ("라벨원단", "m", "Apex Label Materials", "Stable Label Backup"),
         ("잉크", "통", "Korea Ink Supply", "Busan Ink Backup"),
     ],
     "옷감사": [
         ("면 원사", "kg", "Qingdao Cotton Trading", "Vietnam Yarn Backup"),
-        ("폴리 원사", "kg", "Sino Poly Fiber", "Daegu Poly Backup"),
+        ("폴리에스터 원사", "kg", "Sino Poly Fiber", "Daegu Poly Backup"),
+        ("린넨 원사", "kg", "Linen Mill Partners", "Daegu Linen Backup"),
+        ("울 원사", "kg", "Ulaan Wool Trading", "Busan Wool Backup"),
+        ("혼방 원사", "kg", "Mixed Yarn Korea", "Daegu Mixed Backup"),
         ("염료", "kg", "Korea Dye Works", "Busan Dye Backup"),
     ],
     "지퍼단추사": [
-        ("플라스틱 원료", "kg", "Ningbo Resin Parts", "Korea Resin Backup"),
-        ("금속 원료", "kg", "Qingdao Metal Parts", "Incheon Metal Backup"),
-        ("지퍼 테이프", "m", "Shenzhen Zipper Tape", "Korea Tape Backup"),
+        ("플라스틱원료", "kg", "Ningbo Resin Parts", "Korea Resin Backup"),
+        ("금속원료", "kg", "Qingdao Metal Parts", "Incheon Metal Backup"),
+        ("지퍼테이프", "m", "Shenzhen Zipper Tape", "Korea Tape Backup"),
     ],
+}
+
+# 각 agent 폴더의 실제 로직 기준 환산값.
+LABEL_PCS_PER_KG = 1_000
+LABEL_FABRIC_PCS_PER_METER = 25
+LABEL_INK_PCS_PER_CAN = 10_000
+LABEL_INK_CANS_PER_KG = 10
+
+FABRIC_KG_PER_YARD = 0.3  # 옷감agent/backend/routers/release.py, platform_reporter.py 기준
+FABRIC_YARDS_PER_GARMENT = {
+    "T": 1.2,
+    "P": 1.6,
+    "J": 2.1,
+    "D": 2.4,
+}
+YARN_YARDS_PER_KG = {
+    "C": 3.0,
+    "P": 5.0,
+    "L": 2.5,
+    "W": 2.0,
+    "M": 3.5,
+}
+FABRIC_MATERIAL_BY_CODE = {
+    "C": "면 원사",
+    "P": "폴리에스터 원사",
+    "L": "린넨 원사",
+    "W": "울 원사",
+    "M": "혼방 원사",
+}
+
+ZIPPER_BUTTON_GRAM_PER_PIECE = 5
+ZIPPER_BUTTON_PARTS_BY_ITEM_CODE = {
+    "T": ["플라스틱단추"],
+    "P": ["금속단추"],
+    "J": ["지퍼", "금속단추"],
+    "D": ["지퍼"],
+}
+ZIPPER_BUTTON_RAW_BY_PART = {
+    "플라스틱단추": ("플라스틱원료", "kg", 200),
+    "금속단추": ("금속원료", "kg", 150),
+    "지퍼": ("지퍼테이프", "m", 1),
 }
 
 PROBLEM_SUPPLIERS = {
@@ -42,14 +87,14 @@ PROBLEM_SUPPLIERS = {
 }
 
 PRODUCT_PROFILES = [
-    ("W2MTC08RD", "여름", "여성", "면", "티셔츠", "레드"),
-    ("W2WPL07BE", "여름", "여성", "폴리에스터", "팬츠", "베이지"),
+    ("W2MTC08RD", "여름", "남성", "면", "티셔츠", "레드"),
+    ("W2WPL07BE", "여름", "여성", "린넨", "바지", "베이지"),
     ("W1MTP05BE", "봄", "남성", "폴리에스터", "티셔츠", "베이지"),
-    ("W2WTL06WH", "봄", "여성", "리넨", "티셔츠", "화이트"),
-    ("W2MPL09NV", "가을", "남성", "폴리에스터", "팬츠", "네이비"),
-    ("W2WPM10GY", "겨울", "여성", "울", "코트", "그레이"),
-    ("W3MJW01NV", "겨울", "남성", "울", "재킷", "네이비"),
-    ("W2WTO11BK", "가을", "여성", "트윌", "아우터", "블랙"),
+    ("W2WTL06WH", "여름", "여성", "린넨", "티셔츠", "화이트"),
+    ("W2MPL09NV", "여름", "남성", "린넨", "바지", "네이비"),
+    ("W2WPM10GY", "여름", "여성", "혼방", "바지", "그레이"),
+    ("W3MJW01NV", "가을", "남성", "울", "재킷", "네이비"),
+    ("W4WDP11BK", "겨울", "여성", "폴리에스터", "다운", "블랙"),
 ]
 
 CUSTOMERS = [
@@ -61,6 +106,15 @@ CUSTOMERS = [
 ]
 
 DESTINATIONS = ["부산항", "인천항"]
+ROUND_TRIP_FREE_STORAGE_DAYS = 2
+ROUND_TRIP_TARGETS = {
+    "SHP-202607-01": ["케어라벨사", "옷감사"],
+    "SHP-202607-02": ["케어라벨사", "지퍼단추사"],
+    "SHP-202607-03": ["옷감사", "케어라벨사", "지퍼단추사"],
+    "SHP-202607-04": ["케어라벨사"],
+    "SHP-202607-05": ["옷감사", "지퍼단추사"],
+}
+ROUND_TRIP_ARRIVAL_OFFSETS = [2, 1, 0, 2, 1, 0, 2, 1, 0, 2]
 
 
 @dataclass(frozen=True)
@@ -109,6 +163,68 @@ def risk_stage_from_delay(delay_days: int) -> str:
     if delay_days >= 8:
         return "watch"
     return "normal_variation"
+
+
+def item_code(label_code: str) -> str:
+    return label_code[3].upper()
+
+
+def fabric_code(label_code: str) -> str:
+    return label_code[4].upper()
+
+
+def quarter_key(day: date) -> tuple[int, int]:
+    return day.year, ((day.month - 1) // 3) + 1
+
+
+def label_fabric_m_for_qty(label_qty: int) -> int:
+    return math.ceil(label_qty / LABEL_FABRIC_PCS_PER_METER)
+
+
+def label_ink_cans_for_qty(label_qty: int) -> int:
+    return math.ceil(label_qty / LABEL_INK_PCS_PER_CAN)
+
+
+def label_finished_weight_kg(label_qty: int) -> float:
+    return round(label_qty / LABEL_PCS_PER_KG, 3)
+
+
+def label_fabric_weight_kg(fabric_m: float) -> float:
+    return round((fabric_m * LABEL_FABRIC_PCS_PER_METER) / LABEL_PCS_PER_KG, 3)
+
+
+def label_ink_weight_kg(ink_cans: float) -> float:
+    return round(ink_cans / LABEL_INK_CANS_PER_KG, 3)
+
+
+def fabric_yards_for_shipment(label_code: str, garments: int) -> float:
+    return round(garments * FABRIC_YARDS_PER_GARMENT.get(item_code(label_code), 1.5), 1)
+
+
+def fabric_finished_weight_kg(fabric_yards: float) -> float:
+    return round(fabric_yards * FABRIC_KG_PER_YARD, 1)
+
+
+def zipper_button_requirements(label_code: str, garments: int) -> dict[str, int]:
+    return {
+        part: garments
+        for part in ZIPPER_BUTTON_PARTS_BY_ITEM_CODE.get(item_code(label_code), [])
+    }
+
+
+def zipper_button_finished_weight_kg(requirements: dict[str, int]) -> float:
+    total_qty = sum(requirements.values())
+    return round(total_qty * ZIPPER_BUTTON_GRAM_PER_PIECE / 1000, 3)
+
+
+def raw_material_weight_kg(material_name: str, qty: float) -> float | None:
+    if material_name == "라벨원단":
+        return label_fabric_weight_kg(qty)
+    if material_name == "잉크":
+        return label_ink_weight_kg(qty)
+    if material_name.endswith("원사") or material_name in {"염료", "플라스틱원료", "금속원료"}:
+        return round(float(qty), 3)
+    return None
 
 
 def production_buffer_days(year: int, company: str, rng: Random) -> int:
@@ -191,9 +307,97 @@ def build_shipment_plans(rng: Random) -> list[ShipmentPlan]:
     return plans
 
 
-def build_material_receipts(rng: Random) -> list[dict]:
+def build_quarterly_material_needs(plans: list[ShipmentPlan]) -> dict[tuple[int, int, str, str], float]:
+    needs: dict[tuple[int, int, str, str], float] = {}
+
+    def add(year: int, quarter: int, company_name: str, material_name: str, qty: float) -> None:
+        key = (year, quarter, company_name, material_name)
+        needs[key] = needs.get(key, 0.0) + float(qty)
+
+    for plan in plans:
+        year, quarter = quarter_key(plan.shipment_date)
+        code = plan.profile[0]
+        garments = int(plan.garments)
+
+        add(year, quarter, "케어라벨사", "라벨원단", label_fabric_m_for_qty(garments))
+        add(year, quarter, "케어라벨사", "잉크", label_ink_cans_for_qty(garments))
+
+        yards = fabric_yards_for_shipment(code, garments)
+        fc = fabric_code(code)
+        yarn_material = FABRIC_MATERIAL_BY_CODE.get(fc, "혼방 원사")
+        yards_per_kg = YARN_YARDS_PER_KG.get(fc, 3.5)
+        add(year, quarter, "옷감사", yarn_material, math.ceil(yards / yards_per_kg))
+        add(year, quarter, "옷감사", "염료", math.ceil(yards * 0.015))
+
+        for part_name, part_qty in zipper_button_requirements(code, garments).items():
+            material_name, _unit, rate = ZIPPER_BUTTON_RAW_BY_PART[part_name]
+            add(year, quarter, "지퍼단추사", material_name, math.ceil(part_qty / rate * 10) / 10)
+
+    return needs
+
+
+def normalize_order_qty(material_name: str, unit: str, raw_qty: float) -> float | int:
+    if unit in {"m", "통"}:
+        return int(math.ceil(raw_qty))
+    if material_name == "지퍼테이프":
+        return int(math.ceil(raw_qty))
+    return round(float(raw_qty), 1)
+
+
+def port_of_discharge_for_destination(destination: str) -> str:
+    if "인천" in destination:
+        return "Incheon, Republic of Korea"
+    return "Busan, Republic of Korea"
+
+
+def company_by_name(company_name: str) -> dict:
+    for company in COMPANIES:
+        if company["name"] == company_name:
+            return company
+    raise ValueError(f"Unknown company: {company_name}")
+
+
+def material_catalog(company_name: str, material_name: str) -> tuple[str, str, str, str]:
+    for material in MATERIALS[company_name]:
+        if material[0] == material_name:
+            return material
+    raise ValueError(f"Unknown material for {company_name}: {material_name}")
+
+
+def round_trip_material_for_company(plan: ShipmentPlan, company_name: str) -> tuple[str, str, str, float]:
+    code = plan.profile[0]
+    garments = int(plan.garments)
+
+    if company_name == "케어라벨사":
+        material_name = "라벨원단"
+        unit = "m"
+        qty = max(300, math.ceil(label_fabric_m_for_qty(garments) * 0.45))
+    elif company_name == "옷감사":
+        fc = fabric_code(code)
+        material_name = FABRIC_MATERIAL_BY_CODE.get(fc, "혼방 원사")
+        unit = "kg"
+        yards = fabric_yards_for_shipment(code, garments)
+        qty = max(500, math.ceil((yards / YARN_YARDS_PER_KG.get(fc, 3.5)) * 0.3))
+    else:
+        requirements = zipper_button_requirements(code, garments)
+        if requirements:
+            part_name, part_qty = next(iter(requirements.items()))
+            material_name, unit, rate = ZIPPER_BUTTON_RAW_BY_PART[part_name]
+            qty = max(120, math.ceil((part_qty / rate) * 0.5))
+        else:
+            material_name = "플라스틱원료"
+            unit = "kg"
+            qty = 120
+
+    _name, _unit, primary_supplier, backup_supplier = material_catalog(company_name, material_name)
+    supplier = backup_supplier if primary_supplier in PROBLEM_SUPPLIERS else primary_supplier
+    return material_name, unit, supplier, normalize_order_qty(material_name, unit, qty)
+
+
+def build_material_receipts(plans: list[ShipmentPlan], rng: Random) -> list[dict]:
     rows = []
     receipt_id = 1
+    material_needs = build_quarterly_material_needs(plans)
     for year in YEARS:
         for quarter in range(1, 5):
             q_start_month = (quarter - 1) * 3 + 1
@@ -201,16 +405,15 @@ def build_material_receipts(rng: Random) -> list[dict]:
             order_date = promised_date - timedelta(days=45)
             for company in COMPANIES:
                 for material_name, unit, primary_supplier, backup_supplier in MATERIALS[company["name"]]:
+                    required_qty = material_needs.get((year, quarter, company["name"], material_name), 0.0)
+                    if required_qty <= 0:
+                        continue
                     use_backup = year == 2026 and quarter == 4 and primary_supplier in PROBLEM_SUPPLIERS
                     supplier = backup_supplier if use_backup else primary_supplier
                     delay = supplier_delay_days(year, quarter, supplier, rng)
                     actual_date = promised_date + timedelta(days=delay)
-                    qty_base = {
-                        "케어라벨사": 430_000,
-                        "옷감사": 780_000,
-                        "지퍼단추사": 520_000,
-                    }[company["name"]]
-                    qty = int(qty_base * rng.uniform(0.82, 1.22))
+                    qty = normalize_order_qty(material_name, unit, required_qty * rng.uniform(1.06, 1.18))
+                    weight_kg = raw_material_weight_kg(material_name, qty)
                     rows.append(
                         {
                             "receipt_id": f"MAT-{receipt_id:04d}",
@@ -226,11 +429,60 @@ def build_material_receipts(rng: Random) -> list[dict]:
                             "delay_days": delay,
                             "ordered_qty": qty,
                             "unit": unit,
+                            "weight_kg": weight_kg if weight_kg is not None else "",
+                            "quantity_basis": "agent_logic_required_qty_plus_buffer",
+                            "port_of_discharge": "Busan, Republic of Korea",
+                            "round_trip_candidate": "N",
+                            "round_trip_target_shipment_id": "",
+                            "free_storage_until": "",
                             "risk_stage": risk_stage_from_delay(delay),
                             "note": "대체 공급사 테스트" if use_backup else "",
                         }
                     )
                     receipt_id += 1
+
+    target_index = 0
+    plans_by_id = {plan.shipment_batch_id: plan for plan in plans}
+    for shipment_id, target_companies in ROUND_TRIP_TARGETS.items():
+        plan = plans_by_id.get(shipment_id)
+        if not plan:
+            continue
+        for company_name in target_companies:
+            company = company_by_name(company_name)
+            material_name, unit, supplier, qty = round_trip_material_for_company(plan, company_name)
+            arrival_offset = ROUND_TRIP_ARRIVAL_OFFSETS[target_index % len(ROUND_TRIP_ARRIVAL_OFFSETS)]
+            actual_date = plan.shipment_due_date - timedelta(days=arrival_offset)
+            promised_date = actual_date
+            order_date = promised_date - timedelta(days=45)
+            weight_kg = raw_material_weight_kg(material_name, qty)
+            free_storage_until = actual_date + timedelta(days=ROUND_TRIP_FREE_STORAGE_DAYS)
+            rows.append(
+                {
+                    "receipt_id": f"MAT-{receipt_id:04d}",
+                    "year": plan.shipment_due_date.year,
+                    "quarter": f"Q{((plan.shipment_due_date.month - 1) // 3) + 1}",
+                    "company_id": company["id"],
+                    "company_name": company["name"],
+                    "material_name": material_name,
+                    "supplier": supplier,
+                    "order_date": order_date.isoformat(),
+                    "promised_date": promised_date.isoformat(),
+                    "actual_receipt_date": actual_date.isoformat(),
+                    "delay_days": 0,
+                    "ordered_qty": qty,
+                    "unit": unit,
+                    "weight_kg": weight_kg if weight_kg is not None else "",
+                    "quantity_basis": "round_trip_demo_partial_bl_under_free_port_storage",
+                    "port_of_discharge": port_of_discharge_for_destination(plan.destination),
+                    "round_trip_candidate": "Y",
+                    "round_trip_target_shipment_id": shipment_id,
+                    "free_storage_until": free_storage_until.isoformat(),
+                    "risk_stage": "round_trip_candidate",
+                    "note": "귀로매칭 시연용: 항구 무료보관 2일 내 수출건과 연결",
+                }
+            )
+            receipt_id += 1
+            target_index += 1
     return rows
 
 
@@ -238,8 +490,12 @@ def build_finished_shipments(plans: list[ShipmentPlan]) -> list[dict]:
     rows = []
     for plan in plans:
         code, season, gender, fabric, garment_type, color = plan.profile
-        fabric_yards = round(plan.garments * 1.35, 1)
-        total_weight_kg = round(plan.garments * 0.028 + fabric_yards * 0.18, 1)
+        fabric_yards = fabric_yards_for_shipment(code, plan.garments)
+        label_weight_kg = label_finished_weight_kg(plan.garments)
+        fabric_weight_kg = fabric_finished_weight_kg(fabric_yards)
+        zipper_button_req = zipper_button_requirements(code, plan.garments)
+        zipper_button_qty = sum(zipper_button_req.values())
+        zipper_button_weight_kg = zipper_button_finished_weight_kg(zipper_button_req)
         rows.append(
             {
                 "shipment_batch_id": plan.shipment_batch_id,
@@ -258,9 +514,13 @@ def build_finished_shipments(plans: list[ShipmentPlan]) -> list[dict]:
                 "garment_units": plan.garments,
                 "label_qty": plan.garments,
                 "fabric_yards": fabric_yards,
-                "zipper_button_qty": int(plan.garments * 2.4),
-                "total_weight_kg": total_weight_kg,
-                "box_count": max(1, int(plan.garments / 1000)),
+                "zipper_button_qty": zipper_button_qty,
+                "label_weight_kg": label_weight_kg,
+                "fabric_weight_kg": fabric_weight_kg,
+                "zipper_button_weight_kg": zipper_button_weight_kg,
+                "total_weight_kg": label_weight_kg,
+                "box_count": max(1, math.ceil(label_weight_kg / 10)),
+                "weight_basis": "label_agent: 1000pcs=1kg; fabric_agent: 0.3kg/yard; zipper_agent: 5g/pcs",
                 "scenario_tag": plan.scenario_tag,
             }
         )
@@ -272,12 +532,20 @@ def build_production_batches(plans: list[ShipmentPlan], rng: Random) -> list[dic
     production_id = 1
     for plan in plans:
         code, season, gender, fabric, garment_type, color = plan.profile
+        fabric_yards = fabric_yards_for_shipment(code, plan.garments)
+        zipper_button_qty = sum(zipper_button_requirements(code, plan.garments).values())
+        company_quantity = {
+            "옷감사": (fabric_yards, "야드", fabric_finished_weight_kg(fabric_yards)),
+            "케어라벨사": (plan.garments, "장", label_finished_weight_kg(plan.garments)),
+            "지퍼단추사": (zipper_button_qty, "개", zipper_button_finished_weight_kg(zipper_button_requirements(code, plan.garments))),
+        }
         for company in COMPANIES:
             buffer_days = production_buffer_days(plan.shipment_date.year, company["name"], rng)
             complete_date = plan.shipment_due_date - timedelta(days=buffer_days)
             duration = production_duration_days(plan.shipment_date.year, company["name"], plan.garments, rng)
             start_date = complete_date - timedelta(days=duration)
             is_late = complete_date > plan.shipment_due_date
+            production_qty, production_unit, shipment_weight_kg = company_quantity[company["name"]]
             rows.append(
                 {
                     "production_id": f"PRD-{production_id:05d}",
@@ -291,6 +559,9 @@ def build_production_batches(plans: list[ShipmentPlan], rng: Random) -> list[dic
                     "garment_type": garment_type,
                     "color": color,
                     "garment_units": plan.garments,
+                    "production_qty": production_qty,
+                    "production_unit": production_unit,
+                    "shipment_weight_kg": shipment_weight_kg,
                     "production_start_date": start_date.isoformat(),
                     "production_complete_date": complete_date.isoformat(),
                     "production_due_date": plan.shipment_due_date.isoformat(),
@@ -406,6 +677,8 @@ def build_platform_report_messages(
             "material_display_name": row["material_name"],
             "qty": float(row["ordered_qty"]),
             "unit": row["unit"],
+            "weight_kg": float(row["weight_kg"]) if row.get("weight_kg") not in ("", None) else None,
+            "quantity_basis": row.get("quantity_basis"),
             "supplier": row["supplier"],
             "supplier_company": row["supplier"],
             "arrival_date": row["actual_receipt_date"],
@@ -414,8 +687,11 @@ def build_platform_report_messages(
             "delay_days": int(row["delay_days"]),
             "bl_number": f"BL-{row['receipt_id']}",
             "port_of_loading": "Shanghai" if "Qingdao" in row["supplier"] or "Ningbo" in row["supplier"] else "Busan",
-            "port_of_discharge": "Busan, Republic of Korea",
+            "port_of_discharge": row.get("port_of_discharge") or "Busan, Republic of Korea",
             "receiving_company_location": f"{row['company_name']} 공장",
+            "round_trip_candidate": row.get("round_trip_candidate") == "Y",
+            "round_trip_target_shipment_id": row.get("round_trip_target_shipment_id") or None,
+            "free_storage_until": row.get("free_storage_until") or None,
             "risk_stage": row["risk_stage"],
             "report_id": f"demo-{row['receipt_id']}",
         }
@@ -453,7 +729,9 @@ def build_platform_report_messages(
                 {
                     "company_name": item["company_name"],
                     "label_code": item["label_code"],
-                    "release_qty": int(item["garment_units"]),
+                    "release_qty": float(item["production_qty"]),
+                    "unit": item["production_unit"],
+                    "weight_kg": float(item["shipment_weight_kg"]),
                     "due_date": item["production_due_date"],
                     "release_date": item["production_complete_date"],
                     "started_at": item["production_start_date"],
@@ -477,6 +755,10 @@ def build_platform_report_messages(
             "completed_release_qty_total": int(row["garment_units"]),
             "shipment_total_weight_kg": float(row["total_weight_kg"]),
             "shipment_box_count_total": int(row["box_count"]),
+            "shipment_weight_basis": row["weight_basis"],
+            "label_weight_kg": float(row["label_weight_kg"]),
+            "fabric_weight_kg": float(row["fabric_weight_kg"]),
+            "zipper_button_weight_kg": float(row["zipper_button_weight_kg"]),
             "completed_release_list": completed_list,
             "export_port": row["destination"],
             "packing_list": {
@@ -563,6 +845,7 @@ def summarize(material_rows: list[dict], production_rows: list[dict], shipment_r
         "shipment_batches": len(shipment_rows),
         "production_batches": len(production_rows),
         "material_receipts": len(material_rows),
+        "round_trip_demo_import_rows": sum(1 for row in material_rows if row.get("round_trip_candidate") == "Y"),
         "logistics_performance_rows": len(logistics_rows),
         "severe_material_delay_rows_21d_plus": len(severe_material),
         "late_production_rows": len(late_production),
@@ -583,7 +866,7 @@ def main() -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
     plans = build_shipment_plans(rng)
-    material_rows = build_material_receipts(rng)
+    material_rows = build_material_receipts(plans, rng)
     shipment_rows = build_finished_shipments(plans)
     production_rows = build_production_batches(plans, rng)
     logistics_perf_rows = build_logistics_performance(plans, rng)
@@ -612,16 +895,23 @@ def main() -> None:
 목적:
 - 총 의류 {summary['total_garment_units']:,}장 규모의 4년치 시연 데이터
 - 1~2년차는 정상 운영, 3년차는 자재 공급 지연 시작, 4년차는 자재 지연 + 생산성 저하가 확실하게 드러나도록 설계
-- Hermes Insight / 분석 페이지에서 공급사 변경, 선발주, 생산성 개선, 물류 전략 제안을 만들기 위한 근거 데이터
+- AI 인사이트 / 분석 페이지에서 공급사 변경, 선발주, 생산성 개선, 물류 전략 제안을 만들기 위한 근거 데이터
 
 파일:
 - material_receipts.csv: 분기별 원자재 발주/납기/실제입고/공급사/지연일
+- material_receipts.csv 안의 round_trip_candidate=Y 10건: 수출 납기일 D-0~D-2에 같은 항구로 도착한 귀로매칭 시연용 BL
 - production_batches.csv: 생산사별 생산시작/완료/납기/납기여유일
 - finished_shipments.csv: 월 3~4회 출고묶음과 패킹리스트 성격의 생산품 구성
 - logistics_performance.csv: 물류 배차 요청/확정/배송 지연
 - logistics_snapshots.csv: 월별 기사/차량 스냅샷
 - platform_report_messages.csv/jsonl: 플랫폼 report_message 적재용 보고 이벤트
 - dataset_summary.json: 의도된 패턴과 요약 통계
+
+무게/수량 산식:
+- 라벨agent: 완제품 라벨 1,000장 = 1kg, 라벨원단 1m = 25장 생산분, 잉크 1통 = 10,000장 생산분, 잉크 10통 = 1kg
+- 옷감agent: 출고 원단 1야드 = 0.3kg, 원사 1kg당 생산량은 C 3.0야드 / P 5.0야드 / L 2.5야드 / W 2.0야드 / M 3.5야드
+- 지퍼단추agent: 출고품은 개당 5g, 플라스틱단추 200개/kg, 금속단추 150개/kg, 지퍼 1개당 지퍼테이프 1m
+- 플랫폼 label 채널의 shipment_total_weight_kg는 라벨사 출고중량만 의미한다. 옷감/지퍼단추 중량은 fabric_weight_kg, zipper_button_weight_kg로 분리한다.
 
 플랫폼 DB 적재:
 - dry-run: `python 플랫폼agent/backend/seed_four_year_demo.py`
@@ -634,6 +924,7 @@ def main() -> None:
 - 2025년부터 일부 공급사의 21일 이상 지연이 발생한다.
 - 2026년에는 21~45일 지연과 생산 납기 여유일 0~5일/일부 지연이 함께 발생한다.
 - 올해 출고/판매 흐름은 전년도 생산 데이터의 선행 신호로 해석한다.
+- 귀로매칭 시연용 BL은 항구 무료보관 2일을 반영해 수출 납기일이 수입 도착일~도착일+2일 사이에 들어오도록 설계한다.
 """
     (OUT_DIR / "README.md").write_text(readme, encoding="utf-8")
 
