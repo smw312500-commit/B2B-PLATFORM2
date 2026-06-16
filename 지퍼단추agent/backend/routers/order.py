@@ -1,8 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException
+from datetime import date
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session
 from database import get_db
 from models import ZipperOrder, ZipperStock
 from schemas import OrderCreate, OrderOut
+from services.platform_reporter import report_import
 
 router = APIRouter(prefix="/orders", tags=["발주"])
 
@@ -35,7 +37,11 @@ def cancel_order(order_id: int, db: Session = Depends(get_db)):
 
 
 @router.patch("/{order_id}/receive", response_model=OrderOut)
-def receive_order(order_id: int, db: Session = Depends(get_db)):
+async def receive_order(
+    order_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
     """재고도착 버튼: 발주량을 원자재 재고에 더하고 입고완료 처리"""
     order = db.query(ZipperOrder).filter(ZipperOrder.id == order_id).first()
     if not order:
@@ -43,7 +49,6 @@ def receive_order(order_id: int, db: Session = Depends(get_db)):
     if order.status != "대기중":
         raise HTTPException(status_code=400, detail=f"입고 처리 불가 상태: {order.status}")
 
-    # 재고 항목 찾아서 수량 추가
     stock = db.query(ZipperStock).filter(
         ZipperStock.material_name == order.material_name
     ).first()
@@ -51,7 +56,6 @@ def receive_order(order_id: int, db: Session = Depends(get_db)):
     if stock:
         stock.stock_qty = float(stock.stock_qty) + float(order.order_qty)
     else:
-        # 재고 항목이 없으면 신규 생성
         new_stock = ZipperStock(
             material_name=order.material_name,
             unit=order.unit,
@@ -62,4 +66,12 @@ def receive_order(order_id: int, db: Session = Depends(get_db)):
     order.status = "입고완료"
     db.commit()
     db.refresh(order)
+
+    background_tasks.add_task(
+        report_import,
+        order.material_name,
+        float(order.order_qty),
+        date.today(),
+        None,
+    )
     return order

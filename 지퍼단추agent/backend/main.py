@@ -1,7 +1,10 @@
+import asyncio
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from database import engine, Base
 from routers import stock, order, release, agent
+from services.platform_retry import run_platform_retry_loop
 
 Base.metadata.create_all(bind=engine)
 
@@ -19,6 +22,11 @@ app.include_router(stock.router)
 app.include_router(order.router)
 app.include_router(release.router)
 app.include_router(agent.router)
+
+
+@app.on_event("startup")
+async def _start_platform_retry_loop() -> None:
+    asyncio.create_task(run_platform_retry_loop())
 
 
 @app.get("/")

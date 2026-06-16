@@ -16,7 +16,8 @@ export const receiveOrder  = (id)   => api.patch(`/orders/${id}/receive`)
 export const getReleases        = ()          => api.get('/releases/')
 export const createRelease      = (data)      => api.post('/releases/', data)
 export const completeRelease    = (id, times) => api.post(`/releases/${id}/complete`, times ?? {})
-export const deleteReleasesBulk = (ids)       => api.delete('/releases/bulk', { data: ids })
+export const deleteReleasesBulk  = (ids)       => api.delete('/releases/bulk', { data: ids })
+export const downloadPackingList = (from, to)  => api.get(`/releases/packing-list?from=${from}&to=${to}`, { responseType: 'blob' })
 
 // AI Agent
 export const analyzeOrder   = (data) => api.post('/agent/analyze', data)

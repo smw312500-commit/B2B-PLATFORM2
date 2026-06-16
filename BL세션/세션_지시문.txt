@@ -1,0 +1,246 @@
+========================================
+BL(선하증권) 샘플 제작 + 파서 세션 지시문
+========================================
+작성일: 2026-05-30
+
+이 파일을 읽는 AI에게:
+이 세션에서 할 일은 두 가지다.
+1. 각 생산사의 원자재 수입에 맞는 가짜 BL PDF 샘플 제작
+2. BL PDF를 업로드하면 GPT Vision API로 파싱해서 발주 데이터 반환하는 FastAPI 서비스 제작
+3. 원자재 발주 시 공급사에 보낼 '수정 가능한' 정식 구매발주서(PO) DOCX 생성 로직 구축
+
+※ 패킹리스트 생성은 이 세션 범위 아님.
+   패킹리스트는 각 생산사 agent 백엔드에서 자사 출고 데이터 기반으로 생성함.
+   (라벨agent, 옷감agent, 지퍼단추agent 각 세션에서 처리)
+
+========================================
+BL이 이 프로젝트에서 쓰이는 맥락
+========================================
+
+생산사 3곳이 원자재를 해외(중국/인도)에서 수입함.
+원자재가 부산항에 도착하면 BL(선하증권)이 발행됨.
+이 BL을 시스템에 업로드하면 발주 입고 데이터를 자동으로 채워주는 것이 목표.
+
+회사별 수입 원자재:
+  라벨회사     → 라벨원단(m), 잉크(통)         — DB: company_label
+  옷감회사     → 원사(kg), 염료(kg)             — DB: company_fabric
+  지퍼단추회사 → 원목(kg), 플라스틱원료(kg),   — DB: company_zipper
+                 금속원료(kg), 지퍼테이프(m)
+
+========================================
+1. 가짜 BL PDF 샘플 제작
+========================================
+
+폴더: e:\PROJECT\B2B PLATFORM 2\BL세션\samples\
+
+만들 파일:
+  BL_라벨회사_라벨원단.pdf
+  BL_라벨회사_잉크.pdf
+  BL_옷감회사_원사.pdf
+  BL_지퍼단추회사_원목.pdf
+  BL_지퍼단추회사_금속원료.pdf
+
+사용 라이브러리: reportlab
+  pip install reportlab
+
+[ BL 공통 양식 (영문) ]
+
+--------------------------------------------------
+          BILL OF LADING
+--------------------------------------------------
+B/L No.      : {회사별 고유번호}  예) COSCO-2026-001
+Shipper      : {수출자}           예) Shenzhen Textile Co., Ltd.
+                                       No.12 Industrial Rd, Shenzhen, China
+Consignee    : {수입자}           예) W Brand Label Co., Ltd.
+                                       123 Gangseo-gu, Busan, Korea
+Notify Party : Same as Consignee
+Vessel       : EVER GOLDEN        Voyage: 2026-EG-05
+Port of Loading    : SHENZHEN, CHINA
+Port of Discharge  : BUSAN, KOREA
+Date of Issue      : 2026-05-20
+Place of Issue     : SHENZHEN
+
+[ DESCRIPTION OF GOODS ]
+Marks & Nos  | Description of Goods    | Gross Weight | Measurement
+-------------+-------------------------+--------------+-------------
+W-LABEL-001  | LABEL FABRIC ROLL       | 500.0 KGS    | 2.5 CBM
+             | HS CODE: 5407.61        |              |
+
+Freight      : PREPAID
+--------------------------------------------------
+COSCO SHIPPING LINES CO., LTD.
+As Agent for the Carrier
+Signature: ________________
+--------------------------------------------------
+
+[ 회사별 커스텀 값 ]
+
+BL_라벨회사_라벨원단.pdf:
+  B/L No.       : COSCO-2026-LB001
+  Shipper       : Shenzhen Label Fabric Co., Ltd.
+  Consignee     : W Brand Label Co., Ltd. / 123 Gangseo-gu, Busan
+  Description   : LABEL FABRIC ROLL / HS CODE 5407.61
+  Gross Weight  : 500.0 KGS
+  Quantity      : 2000 M (Meters)
+  Vessel        : EVER GOLDEN / 2026-EG-05
+
+BL_라벨회사_잉크.pdf:
+  B/L No.       : COSCO-2026-LB002
+  Shipper       : Guangzhou Ink Supply Co., Ltd.
+  Description   : PRINTING INK (WATER BASED) / HS CODE 3215.11
+  Gross Weight  : 300.0 KGS
+  Quantity      : 30 CANS
+
+BL_옷감회사_원사.pdf:
+  B/L No.       : EVERGREEN-2026-FB001
+  Shipper       : India Cotton Export Ltd. / Mumbai, India
+  Consignee     : W Brand Fabric Co., Ltd. / 456 Saha-gu, Busan
+  Port of Loading : MUMBAI, INDIA
+  Description   : COTTON YARN (COMBED) / HS CODE 5205.11
+  Gross Weight  : 1500.0 KGS
+  Quantity      : 1500 KGS
+
+BL_지퍼단추회사_원목.pdf:
+  B/L No.       : SINOTRANS-2026-ZP001
+  Shipper       : Fujian Wood Material Co., Ltd.
+  Consignee     : W Brand Zipper Co., Ltd. / 789 Haeundae-gu, Busan
+  Description   : WOODEN BUTTON MATERIAL (BOXWOOD) / HS CODE 4421.99
+  Gross Weight  : 800.0 KGS
+  Quantity      : 800 KGS
+
+BL_지퍼단추회사_금속원료.pdf:
+  B/L No.       : SINOTRANS-2026-ZP002
+  Shipper       : Dongguan Metal Parts Co., Ltd.
+  Description   : METAL BUTTON MATERIAL (ZINC ALLOY) / HS CODE 7907.00
+  Gross Weight  : 600.0 KGS
+  Quantity      : 600 KGS
+
+PDF 제작 방법:
+  - reportlab의 canvas 또는 SimpleDocTemplate 사용
+  - 폰트: Helvetica (영문이므로 기본 폰트 가능)
+  - 표 형태로 깔끔하게 제작
+  - 실제 BL처럼 보이게 선/박스/로고 텍스트 포함
+
+========================================
+3. 구매발주서(PO) DOCX 생성 기능
+========================================
+
+목적: BL 파싱 전, 생산사가 해외 공급사에 보낼 정식 Order Sheet를 DOCX로 생성
+사용 라이브러리: python-docx
+  pip install python-docx
+
+[ PO 포함 항목 ]
+- Purchase Order No (발주번호)
+- Vendor Information (공급사 정보)
+- Shipping Terms (인코텀즈 등)
+- Item Table: Material, Specification, Qty, Unit Price, Total Amount
+- Terms and Conditions (법적 고지 사항 - 수정 가능하도록 Word 제공)
+
+생성 경로: e:\PROJECT\B2B PLATFORM 2\BL세션\samples\PO_{회사명}_{날짜}.docx
+
+========================================
+2. BL 파서 서비스 제작
+========================================
+
+폴더: e:\PROJECT\B2B PLATFORM 2\BL세션\parser\
+
+파일 구조:
+  parser/
+  ├── main.py           FastAPI 앱 (포트 8010)
+  ├── requirements.txt
+  ├── .env.example
+  └── bl_parser.py      GPT Vision API 파싱 로직
+
+[ main.py — API 엔드포인트 ]
+
+POST /parse-bl
+  - multipart/form-data로 PDF 파일 업로드
+  - bl_parser.py 호출 → 파싱 결과 반환
+  - 응답 예시:
+    {
+      "bl_number": "COSCO-2026-LB001",
+      "shipper": "Shenzhen Label Fabric Co., Ltd.",
+      "consignee": "W Brand Label Co., Ltd.",
+      "port_of_loading": "SHENZHEN, CHINA",
+      "port_of_discharge": "BUSAN, KOREA",
+      "date_of_issue": "2026-05-20",
+      "vessel": "EVER GOLDEN",
+      "goods": [
+        {
+          "description": "LABEL FABRIC ROLL",
+          "hs_code": "5407.61",
+          "gross_weight_kg": 500.0,
+          "quantity": 2000,
+          "unit": "M"
+        }
+      ],
+      "matched_material": "라벨원단",   ← GPT가 한국어 원자재명으로 매핑
+      "matched_qty": 2000,
+      "matched_unit": "m",
+      "confidence": "high"
+    }
+
+[ bl_parser.py — GPT Vision 파싱 로직 ]
+
+처리 순서:
+  1. PDF → 이미지 변환 (pdf2image 라이브러리)
+     pip install pdf2image
+     ※ Windows에서 poppler 필요 — 설치 방법을 .env.example 주석에 안내
+  2. 이미지를 base64 인코딩
+  3. GPT-4o 또는 GPT-4o-mini Vision API 호출
+  4. 응답 파싱 → JSON 반환
+
+GPT 프롬프트 (영문 BL → 한국어 매핑):
+  """
+  이 이미지는 선하증권(Bill of Lading)입니다.
+  아래 필드를 추출하여 JSON으로 반환하세요:
+  - bl_number, shipper, consignee
+  - port_of_loading, port_of_discharge, date_of_issue, vessel
+  - goods 배열: description, hs_code, gross_weight_kg, quantity, unit
+
+  추가로 아래 원자재 목록 중 goods와 가장 잘 매칭되는 항목을 골라주세요:
+  ["라벨원단", "잉크", "원사", "염료", "원목", "플라스틱원료", "금속원료", "지퍼테이프"]
+
+  matched_material, matched_qty, matched_unit, confidence(high/medium/low) 필드도 포함하세요.
+  반드시 JSON만 출력하세요.
+  """
+
+[ requirements.txt ]
+fastapi
+uvicorn
+python-multipart
+openai
+pdf2image
+Pillow
+python-dotenv
+
+[ .env.example ]
+OPENAI_API_KEY=sk-your-key
+# Windows poppler 설치: https://github.com/oschwartz10612/poppler-windows/releases
+# 다운로드 후 bin 폴더를 PATH에 추가하거나 pdf2image에 poppler_path 지정
+
+========================================
+3. 각사 agent에 BL 업로드 연결 방법 (참고용)
+========================================
+
+이 파서는 독립 서버(포트 8010)로 실행됨.
+각사 agent 프론트엔드의 발주 탭에서:
+  1. BL 파일 업로드 → POST http://localhost:8010/parse-bl 호출
+  2. 응답의 matched_material, matched_qty, matched_unit으로 발주 입력폼 자동 채움
+  3. 작업자가 확인 후 발주 등록 버튼 클릭
+
+각사 agent 프론트/백엔드 연결은 각사 세션에서 별도 진행.
+이 세션에서는 샘플 PDF 5개 + 파서 서버만 완성하면 됨.
+
+========================================
+완성 기준
+========================================
+
+□ samples/ 폴더에 BL PDF 5개 생성됨 (실제 BL처럼 보이는 영문 PDF)
+□ POST /parse-bl — PDF 업로드 시 JSON 응답 정상 반환
+□ matched_material이 한국어 원자재명으로 정확히 매핑됨
+□ POST /generate-packing-list — 회사별 데이터로 패킹리스트 PDF 다운로드
+□ 패킹리스트 PDF가 영문 표 형태로 깔끔하게 출력됨
+□ 라벨회사 / 옷감회사 / 지퍼단추회사 3개 케이스 모두 정상 작동
+
+========================================

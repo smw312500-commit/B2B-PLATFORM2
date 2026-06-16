@@ -2,8 +2,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List
 from database import get_db
-from models import Vehicle, Driver
+from models import Vehicle
 from schemas import VehicleCreate, VehicleUpdate, VehicleOut
+from services.platform_sync import sync_drivers_to_platform
 
 router = APIRouter()
 
@@ -22,15 +23,14 @@ def get_vehicles(db: Session = Depends(get_db)):
 
 @router.post("/", response_model=VehicleOut)
 def create_vehicle(data: VehicleCreate, db: Session = Depends(get_db)):
-    driver = db.query(Driver).filter(Driver.id == data.driver_id).first()
-    if not driver:
-        raise HTTPException(status_code=404, detail="기사를 찾을 수 없습니다")
     vehicle = Vehicle(**data.dict())
     db.add(vehicle)
     db.commit()
     db.refresh(vehicle)
+    sync_drivers_to_platform(db)
     out = VehicleOut.from_orm(vehicle)
-    out.driver_name = driver.name
+    if vehicle.driver:
+        out.driver_name = vehicle.driver.name
     return out
 
 
@@ -43,6 +43,7 @@ def update_vehicle(vehicle_id: int, data: VehicleUpdate, db: Session = Depends(g
         setattr(vehicle, key, value)
     db.commit()
     db.refresh(vehicle)
+    sync_drivers_to_platform(db)
     out = VehicleOut.from_orm(vehicle)
     if vehicle.driver:
         out.driver_name = vehicle.driver.name
@@ -56,4 +57,5 @@ def delete_vehicle(vehicle_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="차량을 찾을 수 없습니다")
     db.delete(vehicle)
     db.commit()
+    sync_drivers_to_platform(db)
     return {"message": "삭제 완료"}

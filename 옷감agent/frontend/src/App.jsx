@@ -3,16 +3,20 @@ import Header from './components/Header';
 import AIAgentPanel from './components/AIAgentPanel';
 import StockTab from './components/StockTab';
 import OrderTab from './components/OrderTab';
-import CancelTab from './components/CancelTab';
+import ProductionTab from './components/ProductionTab';
+import CompletedTab from './components/CompletedTab';
 import OtherTab from './components/OtherTab';
+import PlatformReportTab from './components/PlatformReportTab';
 import { agentApi } from './api';
 import './App.css';
 
 const TABS = [
-  { id: 'stock',  label: '재고' },
-  { id: 'order',  label: '발주하기' },
-  { id: 'cancel', label: '발주취소' },
-  { id: 'other',  label: '기타' },
+  { id: 'stock',      label: '재고' },
+  { id: 'order',      label: '발주하기' },
+  { id: 'production', label: '생산' },
+  { id: 'completed',  label: '완성이력' },
+  { id: 'platform-report', label: '플랫폼 보고' },
+  { id: 'other',      label: '기타' },
 ];
 
 const FABRIC_CODES = ['C', 'P', 'L', 'W', 'M'];
@@ -61,8 +65,10 @@ export default function App() {
     switch (activeTab) {
       case 'stock':  return <StockTab onRefreshAgent={refreshAgent} agentStatus={agentStatus} />;
       case 'order':  return <OrderTab onRefreshAgent={refreshAgent} />;
-      case 'cancel': return <CancelTab onRefreshAgent={refreshAgent} />;
-      case 'other':  return <OtherTab />;
+      case 'production': return <ProductionTab />;
+      case 'completed':  return <CompletedTab />;
+      case 'platform-report': return <PlatformReportTab agentStatus={agentStatus} onRefresh={refreshAgent} />;
+      case 'other':      return <OtherTab />;
       default:       return null;
     }
   };
@@ -138,7 +144,7 @@ export default function App() {
       <div className="main-layout">
         <div className="content-area">{renderTab()}</div>
         <div className="agent-area">
-          <AIAgentPanel status={agentStatus} onRefresh={refreshAgent} />
+          <AIAgentPanel status={agentStatus} onRefresh={refreshAgent} onOpenReportChannel={() => setActiveTab('platform-report')} />
         </div>
       </div>
     </div>

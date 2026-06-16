@@ -1,32 +1,26 @@
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
-from datetime import date
+import os
 import math
-from database import get_db
-from models import FabricRelease, FabricStock
+from datetime import date
+
+import httpx
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
+from database import get_db
+from models import FabricProduction, FabricRelease, FabricStock
+from schemas import PlatformReportReply
+from services.ai_status import build_agent_status_snapshot
+from services.platform_report_state import get_report_status_snapshot, record_platform_reply
+from services.production_rules import (
+    FABRIC_NAMES,
+    SAFE_STOCK,
+    YARN_RATIO,
+    calc_required_days,
+    calc_required_hours,
+)
 
 router = APIRouter(prefix="/agent", tags=["agent"])
-
-PRODUCTION_SPEED = {"C": 8, "P": 15, "L": 5, "W": 4, "M": 10}
-YARN_RATIO       = {"C": 3.0, "P": 5.0, "L": 2.5, "W": 2.0, "M": 3.5}
-FABRIC_NAMES     = {"C": "면", "P": "폴리에스터", "L": "린넨", "W": "울", "M": "혼방"}
-MACHINES    = 5
-DAILY_HOURS = 9
-
-SAFE_STOCK = {"C": 500, "P": 300, "L": 200, "W": 150, "M": 250}
-
-
-def calc_required_days(fabric_code: str, qty: float) -> float:
-    speed = PRODUCTION_SPEED.get(fabric_code, 8)
-    hours = qty / (MACHINES * speed)
-    days  = hours / DAILY_HOURS
-    return math.ceil(days * 10) / 10
-
-
-def calc_required_hours(fabric_code: str, qty: float) -> float:
-    speed = PRODUCTION_SPEED.get(fabric_code, 8)
-    return round(qty / (MACHINES * speed), 1)
 
 
 # ── Agent Status ─────────────────────────────────────────────
@@ -92,11 +86,36 @@ def get_agent_status(db: Session = Depends(get_db)):
             else:
                 stock_warnings.append(f"⚠ 발주 권고: [{item}] {qty:.0f}야드 (안전재고 {safe}야드)")
 
+    # [2026-06-02 13:27] AI Agent 현재상황 판단 고도화
+    active_productions_raw = db.query(FabricProduction).filter(FabricProduction.stage != "완성").all()
+    all_productions = db.query(FabricProduction).all()
+    snapshot = build_agent_status_snapshot(
+        all_stocks=all_stocks,
+        active_productions_raw=active_productions_raw,
+        all_productions=all_productions,
+        platform_report_status=get_report_status_snapshot(),
+        today=today,
+    )
+
     return {
         "stocks": stocks_list,
         "active_orders": active_orders,
         "stock_warnings": stock_warnings,
+        **snapshot,
     }
+
+
+# ── 플랫폼 보고 응답/추가지시 수신 ────────────────────────────────
+@router.post("/report-reply")
+def report_reply(body: PlatformReportReply):
+    message = record_platform_reply(
+        report_type=body.report_type,
+        item_ref=body.item_ref,
+        status=body.status,
+        message=body.message,
+        payload=body.payload,
+    )
+    return {"received": True, "message": message}
 
 
 # ── Validate ─────────────────────────────────────────────────
@@ -178,3 +197,22 @@ def analyze_order(body: AnalyzeRequest, db: Session = Depends(get_db)):
         "warnings": warnings,
         "instructions": instructions,
     }
+
+
+# ── BL 파싱 (포트 8010 파서 서비스로 프록시) ──────────────────────
+@router.post("/parse-bl")
+async def parse_bl(file: UploadFile = File(...)):
+    bl_parser_url = os.getenv("BL_PARSER_URL", "http://localhost:8010/parse-bl")
+    content = await file.read()
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                bl_parser_url,
+                files={"file": (file.filename, content, file.content_type or "application/octet-stream")},
+            )
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.ConnectError:
+        raise HTTPException(status_code=503, detail="BL 파서 서비스에 연결할 수 없습니다 (포트 8010 확인)")
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail=f"BL 파서 오류: {e.response.text}")

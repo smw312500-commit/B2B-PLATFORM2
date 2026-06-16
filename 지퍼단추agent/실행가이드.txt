@@ -9,40 +9,35 @@
   - Python 3.11+
   - Node.js 18+
   - MySQL 서버 실행 중
-  - company_zipper 스키마 생성:
-      CREATE DATABASE company_zipper CHARACTER SET utf8mb4;
+  - company_zipper 스키마는 백엔드 최초 실행 시 자동 생성됩니다.
 
 ========================================
-2. 백엔드 실행
+2. 간편 실행 (권장)
 ========================================
 
+  start.bat 더블클릭
+  → 백엔드(8003) + 프론트엔드(5175) 자동 실행
+  → 브라우저 자동 오픈: http://localhost:5175
+
+========================================
+3. 수동 실행
+========================================
+
+  [ 백엔드 ]
   cd 지퍼단추agent\backend
-
-  # 환경변수 설정
   copy .env.example .env
-  # .env 파일을 열어 DB 접속정보 / OPENAI_API_KEY 입력
-
-  # 패키지 설치
+  # .env 파일에서 DB 접속정보 / OPENAI_API_KEY 입력
   pip install -r requirements.txt
+  uvicorn main:app --reload --port 8003
 
-  # 서버 실행 (포트 8002)
-  python main.py
+  API 문서: http://localhost:8003/docs
 
-  # 또는
-  uvicorn main:app --reload --port 8002
-
-  API 문서: http://localhost:8002/docs
-
-========================================
-3. 프론트엔드 실행
-========================================
-
+  [ 프론트엔드 ]
   cd 지퍼단추agent\frontend
-
   npm install
-  npm start
+  npx vite
 
-  # 브라우저: http://localhost:3000
+  브라우저: http://localhost:5175
 
 ========================================
 4. DB 테이블 자동 생성
@@ -50,23 +45,24 @@
 
   백엔드 최초 실행 시 SQLAlchemy가 자동으로
   아래 테이블을 생성합니다:
-    - zipper_stock        (완제품 재고)
-    - raw_material_stock  (원자재 재고)
-    - zipper_order        (발주)
-    - zipper_release      (출고)
+    - zipper_stock   (원자재 재고)
+    - zipper_order   (발주)
+    - zipper_release (출고/생산)
 
-  초기 데이터도 자동 삽입됩니다.
+  스키마 초기화가 필요할 때:
+    cd backend
+    python init_db.py
 
 ========================================
 5. 포트 정리
 ========================================
 
-  Backend:  8002
-  Frontend: 3000
+  Backend:  8003
+  Frontend: 5175
   MySQL:    3306 (기본값)
 
-  라벨agent Backend:  8001 (다른 에이전트와 충돌 주의)
-  옷감agent Backend:  8003 (예정)
+  라벨agent Backend:  8001
+  옷감agent Backend:  8002
 
 ========================================
 6. OPENAI_API_KEY 없이 실행

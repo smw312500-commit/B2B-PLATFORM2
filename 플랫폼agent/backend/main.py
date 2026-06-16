@@ -6,7 +6,7 @@ from init_db import init
 
 load_dotenv()
 
-from routers import agent_report, collected, dashboard, dispatch, insights, labelcode, report_channels  # noqa: E402
+from routers import agent_report, collected, dashboard, dispatch, insights, labelcode, logistics_sync, packing_list, report_channels  # noqa: E402
 
 app = FastAPI(title="B2B Platform Agent", version="1.0.0")
 
@@ -32,6 +32,8 @@ app.include_router(dashboard.router, prefix="/api", tags=["대시보드"])
 app.include_router(labelcode.router, prefix="/api", tags=["라벨코드"])
 app.include_router(agent_report.router, prefix="/api", tags=["에이전트 보고"])
 app.include_router(report_channels.router, prefix="/api", tags=["보고 채널"])
+app.include_router(logistics_sync.router, prefix="/api", tags=["물류 동기화"])
+app.include_router(packing_list.router, prefix="/api", tags=["패킹리스트"])
 
 
 @app.on_event("startup")

@@ -4,14 +4,16 @@ import StockTab from './components/tabs/StockTab'
 import OrderTab from './components/tabs/OrderTab'
 import ProductionTab from './components/tabs/ProductionTab'
 import CompleteTab from './components/tabs/CompleteTab'
+import PlatformReportTab from './components/tabs/PlatformReportTab'
 import AgentPanel from './components/AgentPanel'
 import { analyzeOrder, validateItem } from './services/api'
 
 const TABS = [
-  { id: 'stock',      label: '재고' },
-  { id: 'order',      label: '발주' },
-  { id: 'production', label: '생산' },
-  { id: 'complete',   label: '완료' },
+  { id: 'stock',           label: '재고' },
+  { id: 'order',           label: '발주' },
+  { id: 'production',      label: '생산' },
+  { id: 'complete',        label: '완료' },
+  { id: 'platform-report', label: '지퍼단추사 채팅창' },
 ]
 
 function toISO(d) { return d.toISOString().split('T')[0] }
@@ -120,6 +122,7 @@ export default function App() {
           {activeTab === 'order'      && <OrderTab      searched={searched} />}
           {activeTab === 'production' && <ProductionTab searched={searched} />}
           {activeTab === 'complete'   && <CompleteTab   searched={searched} />}
+          {activeTab === 'platform-report' && <PlatformReportTab />}
         </div>
         <div className="w-80 border-l border-gray-200 bg-white overflow-y-auto flex-shrink-0">
           <AgentPanel />

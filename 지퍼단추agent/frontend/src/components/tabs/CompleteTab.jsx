@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { getReleases, completeRelease } from '../../services/api'
+import { getReleases, completeRelease, downloadPackingList } from '../../services/api'
 
 const PROD_LOG_KEY = 'zipper_prod_log_v1'
 
@@ -20,8 +20,9 @@ function fmtDT(d) {
 }
 
 export default function CompleteTab({ searched }) {
-  const [releases, setReleases]     = useState([])
-  const [completing, setCompleting] = useState(null)
+  const [releases, setReleases]       = useState([])
+  const [completing, setCompleting]   = useState(null)
+  const [downloading, setDownloading] = useState(false)
 
   const fetchReleases = async () => {
     const res = await getReleases()
@@ -42,6 +43,28 @@ export default function CompleteTab({ searched }) {
     } catch (err) {
       alert(err.response?.data?.detail || '완료 처리 실패')
     } finally { setCompleting(null) }
+  }
+
+  const handlePackingList = async () => {
+    if (!searched) {
+      alert('날짜 범위를 설정하세요.\n우측 상단 캘린더에서 기간을 선택한 후 다시 시도해주세요.')
+      return
+    }
+    setDownloading(true)
+    try {
+      const res  = await downloadPackingList(searched.from, searched.to)
+      const url  = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }))
+      const a    = document.createElement('a')
+      a.href     = url
+      a.download = `packing_list_${searched.from}_${searched.to}.pdf`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      const msg = err.response?.status === 404
+        ? '해당 기간 출고완료 건이 없습니다.'
+        : (err.response?.data?.detail || '패킹리스트 생성 실패')
+      alert(msg)
+    } finally { setDownloading(false) }
   }
 
   const pending   = releases.filter((r) => r.status === '생산중')
@@ -86,10 +109,26 @@ export default function CompleteTab({ searched }) {
 
       {/* 출고완료 이력 */}
       <section>
-        <p className="text-sm font-medium text-gray-600 mb-2">
-          출고완료 이력 ({completed.length}건)
-          {searched && <span className="ml-2 text-xs text-blue-500 font-normal">출고일 기준 필터 적용중</span>}
-        </p>
+        <div className="flex items-center justify-between mb-2">
+          <p className="text-sm font-medium text-gray-600">
+            출고완료 이력 ({completed.length}건)
+            {searched && <span className="ml-2 text-xs text-blue-500 font-normal">출고일 기준 필터 적용중</span>}
+          </p>
+          <button
+            onClick={handlePackingList}
+            disabled={downloading}
+            className="text-sm bg-indigo-600 text-white px-4 py-1.5 rounded hover:bg-indigo-700 disabled:opacity-50 whitespace-nowrap"
+          >
+            {downloading ? '생성중...' : '📄 패킹리스트 다운로드'}
+          </button>
+        </div>
+
+        {searched && (
+          <p className="text-xs text-gray-400 mb-2">
+            기간: {searched.from} ~ {searched.to} 출고완료 건 합산 PDF 생성
+          </p>
+        )}
+
         <div className="overflow-x-auto">
           <table className="w-full text-sm border-collapse">
             <thead>

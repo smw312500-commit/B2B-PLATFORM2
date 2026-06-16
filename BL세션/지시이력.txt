@@ -1,0 +1,104 @@
+========================================
+BL세션 지시 이력
+========================================
+형식: [YYYY-MM-DD HH:MM] 지시 내용 / 결과
+
+----------------------------------------
+[2026-05-30] 초기 세션 계획
+----------------------------------------
+지시: BL 샘플 PDF 제작 + BL 파서 서비스 구축
+  - 세션_지시문.txt 참고
+결과: 완료
+  - 만들 것:
+    · samples/ — 가짜 BL PDF 5개 (reportlab) → 완료 (2026-06-15)
+    · parser/  — FastAPI 파서 서버 (포트 8010) → 완료 (2026-06-12 항목 참고)
+    · POST /parse-bl — GPT Vision으로 BL 파싱 → 발주 데이터 JSON 반환 → 완료 (2026-06-12 항목 참고)
+
+  [2026-06-15 추가 작업] samples/generate_samples.py를 parser/venv 파이썬
+  (reportlab 4.5.1 설치되어 있음)으로 실행하여 samples/ 폴더에 PDF 5개 생성:
+    · bl_fabric_cotton_poly.pdf  — 옷감사: 면/폴리에스터 원사 (COTTON_YARN, POLY_YARN)
+    · bl_fabric_linen_wool.pdf   — 옷감사: 린넨/울/혼방 원사 (LINEN_YARN, WOOL_YARN, MIXED_YARN)
+    · bl_label_materials.pdf     — 라벨사: 라벨원단 + 잉크 (LABEL_FABRIC, PRINT_INK)
+    · bl_zipper_metal.pdf        — 지퍼단추사: 지퍼테이프 + 금속원료 (ZIPPER_TAPE, RAW_METAL)
+    · bl_button_materials.pdf    — 지퍼단추사: 원목 + 플라스틱원료 (RAW_WOOD, RAW_PLASTIC)
+  생성된 PDF는 [CODE] DESCRIPTION QTY UNIT WEIGHT 표를 포함하는 영문 BL 양식이며,
+  parser/main.py의 CODE_NAMES / bl_parser_gpt.py의 MATERIAL_CODE 매핑과 코드가 일치함.
+
+  ※ 로직문서 충돌/누락 사항:
+    - 세션_지시문.txt의 "완성 기준"에는 POST /generate-packing-list(패킹리스트 PDF)도
+      포함되어 있으나, 같은 문서 상단 "※ 패킹리스트 생성은 이 세션 범위 아님" 문구와
+      충돌함. 패킹리스트는 각 생산사 agent(라벨/옷감/지퍼단추) 세션에서 자체 구현하는
+      것으로 보고 이번 작업에서는 BL 샘플 PDF 생성만 진행함.
+    - 세션_지시문.txt 섹션 "3. 구매발주서(PO) DOCX 생성 기능"(python-docx)은
+      지시이력의 [2026-05-30] "만들 것" 목록에는 포함되지 않았고 별도 미착수 상태.
+      필요 시 추가 지시로 진행할 것.
+
+※ 패킹리스트 생성은 이 세션 범위 아님.
+   각 생산사 agent 세션(라벨/옷감/지퍼단추)에서 처리.
+
+----------------------------------------
+[2026-06-12 17:00] parser GPT Vision 파싱 적용 (옷감agent BL 업로드 오류 대응)
+----------------------------------------
+지시: 옷감agent에서 실제 BL PDF(괄호 코드 없는 일반 양식)를 업로드하면
+  "BL에서 품목을 찾을 수 없습니다" 오류가 발생. parser/main.py의 정규식 파서는
+  `[COTTON_YARN]` 같은 괄호 코드 표기만 인식해 일반 BL 양식을 못 읽는 문제 확인.
+  세션_지시문.txt 원래 설계대로 GPT Vision 기반 파싱으로 교체할 것
+  (OpenAI API 키 사용자 제공).
+
+결과:
+  - parser/bl_parser_gpt.py 신규 — PyMuPDF(fitz)로 PDF 페이지를 PNG로 렌더링 후
+    GPT-4o-mini Vision(JSON 모드)으로 BL 정보 + 품목을 파싱.
+    품목별로 matched_material(한국어 원자재명: 면/폴리에스터/린넨/울/혼방 원사,
+    라벨원단, 잉크, 원목, 플라스틱원료, 금속원료, 지퍼테이프, 염료 중 매칭),
+    matched_qty, matched_unit, confidence를 함께 반환.
+    MATERIAL_CODE 매핑으로 main.py의 CODE_NAMES 코드(COTTON_YARN 등)와 연결.
+  - parser/main.py — /parse-bl에서 GPT 파싱을 우선 시도하고, OPENAI_API_KEY가
+    없거나 GPT 결과에 품목이 없으면 기존 pdfplumber 정규식 파서로 자동 대체(폴백).
+    응답 스키마(BLResult: bl_number/shipper/port_of_loading/port_of_discharge/
+    vessel/eta/items[])는 기존과 동일하게 유지해 각 agent 프론트와 호환.
+  - parser/requirements.txt — openai, pymupdf, python-dotenv 추가.
+    (pdf2image+poppler 대신 PyMuPDF 사용 — Windows에 추가 설치 불필요)
+  - parser/.env (gitignored) — OPENAI_API_KEY 저장. parser/.env.example 추가.
+  - parser 전용 venv 생성 후 위 의존성 설치, uvicorn --port 8010으로 재기동.
+  - 테스트: PyMuPDF로 생성한 BL 텍스트 PDF(원단 품목 5종 + B/L NO./선적항/도착항/
+    선박/ETA 포함)를 /parse-bl에 업로드 → 전 필드 정상 추출 및 원사 코드 매핑 확인.
+
+----------------------------------------
+[2026-06-15 (추가)] 구매발주서(PO) DOCX 5개 생성 — 세션_지시문.txt 섹션 3 이행
+----------------------------------------
+지시: "지시이력대로 데이터 만들어" — 위 [2026-05-30] 항목에서 "별도 미착수 상태"로
+  남겨둔 세션_지시문.txt 섹션 3(구매발주서 PO DOCX 생성)을 진행할 것.
+
+결과:
+  - parser/venv에 python-docx(1.2.0) 설치, parser/requirements.txt에
+    python-docx>=1.1.0 추가.
+  - samples/generate_po.py 신규 — python-docx로 PO(Purchase Order) DOCX를
+    생성. samples/의 BL 5개와 1:1 대응(PO 발행 → 선적/BL 발행 흐름 재현):
+      · PO_라벨회사_2026-05-15.docx     (PO-2026-L001 ↔ BL-2026-L001,
+        Guangzhou Label Supply Co., Ltd. / Label Fabric 50,000m + Printing Ink 80cans)
+      · PO_옷감회사_2026-05-15.docx     (PO-2026-F001 ↔ BL-2026-F001,
+        Shanghai Textile Manufacturing Co., Ltd. / Cotton Yarn 500kg + Polyester Yarn 300kg)
+      · PO_옷감회사_2026-05-16.docx     (PO-2026-F002 ↔ BL-2026-F002,
+        Qingdao Premium Textile Co., Ltd. / Linen+Wool+Mixed Yarn)
+      · PO_지퍼단추회사_2026-05-15.docx (PO-2026-Z001 ↔ BL-2026-Z001,
+        YKK Shanghai Trading Co., Ltd. / Zipper Tape 2,000m + Metal Material 500kg)
+      · PO_지퍼단추회사_2026-05-16.docx (PO-2026-B001 ↔ BL-2026-B001,
+        Wenzhou Button Manufacturing Co., Ltd. / Wood 300kg + Plastic 400kg)
+  - 각 PO는 PO No./PO Date/Vendor/Buyer(YeongFab Fashion Co., Ltd.)/Incoterm
+    (FOB Shanghai, China)/Related BL No./Port of Loading·Discharge 헤더 테이블,
+    품목 테이블(Material/Specification/Qty/Unit/Unit Price(USD)/Amount(USD) +
+    TOTAL행), Terms and Conditions(품질/지연배상/결제조건/선적서류/관할·중재/
+    수정조항 6항목), 서명란으로 구성. .docx이므로 작업자가 자유롭게 수정 가능.
+  - 검증: parser/venv 파이썬으로 generate_po.py 실행 → samples/에 PO_*.docx
+    5개 생성 확인, python-docx로 각 파일의 헤더 테이블/품목 테이블/TOTAL 금액
+    재로딩하여 내용 정상 확인.
+
+결과: 완료
+
+----------------------------------------
+※ 다음 지시 시 아래 형식으로 추가할 것:
+
+[YYYY-MM-DD HH:MM] 지시 제목
+지시: (무엇을 요청했는지)
+결과: (무엇이 구현됐는지)
+========================================

@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from datetime import date, datetime
 from decimal import Decimal
 
@@ -72,6 +72,31 @@ class FabricReleaseOut(FabricReleaseBase):
         from_attributes = True
 
 
+# ── FabricProduction ─────────────────────────────────────────
+class FabricProductionCreate(BaseModel):
+    fabric_code: str = Field(..., max_length=1)
+    color_code: str = Field(..., max_length=2)
+    quantity: Decimal
+    stage: str = "원사입고"
+    target_date: date
+    worker: Optional[str] = None
+    note: Optional[str] = None
+
+
+class FabricProductionStageUpdate(BaseModel):
+    stage: str
+
+
+class FabricProductionOut(FabricProductionCreate):
+    id: int
+    created_at:   Optional[datetime]
+    updated_at:   Optional[datetime]
+    completed_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
 # ── Agent ────────────────────────────────────────────────────
 class OrderStatus(BaseModel):
     release_id: int
@@ -99,3 +124,18 @@ class AgentStatus(BaseModel):
     orders: List[OrderStatus]
     stock_warnings: List[StockWarning]
     instructions: List[str]
+
+
+# ── 돌발상황 보고 ─────────────────────────────────────────────
+class IncidentReport(BaseModel):
+    reason: str
+    new_estimated_completion: Optional[str] = None
+
+
+# ── 플랫폼 보고 응답/추가지시 (POST /agent/report-reply) ────────────
+class PlatformReportReply(BaseModel):
+    report_type: str
+    item_ref: str
+    status: str = "수신확인"
+    message: str
+    payload: Optional[Dict[str, Any]] = None

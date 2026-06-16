@@ -61,3 +61,12 @@ def update_stock(stock_id: int, data: FabricStockUpdate, db: Session = Depends(g
     db.commit()
     db.refresh(item)
     return item
+
+
+@router.delete("/{stock_id}", status_code=204)
+def delete_stock(stock_id: int, db: Session = Depends(get_db)):
+    item = db.query(FabricStock).filter(FabricStock.id == stock_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="재고 항목을 찾을 수 없습니다.")
+    db.delete(item)
+    db.commit()

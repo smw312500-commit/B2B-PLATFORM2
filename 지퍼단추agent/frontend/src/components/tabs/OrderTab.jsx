@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import axios from 'axios'
 import * as XLSX from 'xlsx'
 import { getOrders, createOrder, cancelOrder, receiveOrder } from '../../services/api'
 
@@ -78,7 +79,12 @@ export default function OrderTab({ searched }) {
   const [excelErrors, setExcelErrors]   = useState([])
   const [uploading, setUploading]       = useState(false)
   const [uploadResult, setUploadResult] = useState(null)
-  const fileRef = useRef(null)
+  const fileRef    = useRef(null)
+  // BL 업로드
+  const [showBL, setShowBL]         = useState(false)
+  const [blParsing, setBlParsing]   = useState(false)
+  const [blResult, setBlResult]     = useState(null)
+  const blFileRef  = useRef(null)
 
   const fetchOrders = async () => {
     const res = await getOrders()
@@ -151,6 +157,25 @@ export default function OrderTab({ searched }) {
     if (fileRef.current) fileRef.current.value = ''
   }
 
+  const handleBLUpload = async (e) => {
+    const file = e.target.files[0]; if (!file) return
+    setBlParsing(true); setBlResult(null)
+    const formData = new FormData()
+    formData.append('file', file)
+    try {
+      const res = await axios.post('http://localhost:8010/parse-bl', formData,
+        { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 15000 })
+      setBlResult({ ok: true, data: res.data })
+    } catch (err) {
+      const msg = err.code === 'ECONNREFUSED' || err.code === 'ERR_NETWORK'
+        ? 'BL 파서 서비스(포트 8010)에 연결할 수 없습니다.'
+        : (err.response?.data?.detail || err.message)
+      setBlResult({ ok: false, msg })
+    } finally { setBlParsing(false); if (blFileRef.current) blFileRef.current.value = '' }
+  }
+
+  const handleBLClose = () => { setShowBL(false); setBlResult(null) }
+
   const filtered = searched ? orders.filter((o) => inRange(o.order_date, searched)) : orders
   const active  = filtered.filter((o) => o.status === '대기중')
   const history = filtered.filter((o) => o.status !== '대기중')
@@ -163,16 +188,55 @@ export default function OrderTab({ searched }) {
           {searched && <span className="ml-2 text-xs text-blue-500 font-normal">발주일 기준 필터 적용중</span>}
         </h3>
         <div className="flex gap-2">
-          <button onClick={() => { setShowExcel(!showExcel); setShowForm(false) }}
+          <button onClick={() => { setShowBL(!showBL); setShowExcel(false); setShowForm(false) }}
+            className={`text-sm px-4 py-1.5 rounded border transition-colors ${showBL ? 'bg-purple-600 text-white border-purple-600' : 'bg-white text-purple-700 border-purple-400 hover:bg-purple-50'}`}>
+            📋 BL 업로드
+          </button>
+          <button onClick={() => { setShowExcel(!showExcel); setShowForm(false); setShowBL(false) }}
             className={`text-sm px-4 py-1.5 rounded border transition-colors ${showExcel ? 'bg-green-600 text-white border-green-600' : 'bg-white text-green-700 border-green-400 hover:bg-green-50'}`}>
             📂 엑셀 업로드
           </button>
-          <button onClick={() => { setShowForm(!showForm); setShowExcel(false) }}
+          <button onClick={() => { setShowForm(!showForm); setShowExcel(false); setShowBL(false) }}
             className="text-sm bg-blue-600 text-white px-4 py-1.5 rounded hover:bg-blue-700">
             + 발주 등록
           </button>
         </div>
       </div>
+
+      {showBL && (
+        <div className="border rounded p-4 bg-purple-50 space-y-3 text-sm border-purple-200">
+          <div className="flex items-start justify-between">
+            <div>
+              <p className="font-medium text-purple-800 mb-1">BL(선하증권) 파서 연결</p>
+              <p className="text-xs text-gray-500">BL 파일을 업로드하면 포트 8010 파서 서비스로 전송합니다.</p>
+            </div>
+            <button onClick={handleBLClose} className="text-xs text-gray-400 hover:text-gray-600">닫기</button>
+          </div>
+          <label className={`cursor-pointer inline-flex items-center gap-2 bg-white border border-dashed rounded px-4 py-2 text-xs transition-colors ${blParsing ? 'opacity-50 pointer-events-none' : 'border-purple-400 text-purple-700 hover:bg-purple-50'}`}>
+            {blParsing ? '⏳ 파싱 중...' : '📄 BL 파일 선택'}
+            <input ref={blFileRef} type="file" accept=".pdf,.xlsx,.xls,.csv" className="hidden"
+              onChange={handleBLUpload} disabled={blParsing} />
+          </label>
+          {blResult && (
+            blResult.ok
+              ? (
+                <div className="bg-white border border-purple-200 rounded p-3 space-y-1">
+                  <p className="text-xs font-semibold text-purple-700 mb-2">✅ 파싱 완료</p>
+                  <pre className="text-xs text-gray-700 overflow-x-auto whitespace-pre-wrap max-h-48">
+                    {typeof blResult.data === 'object'
+                      ? JSON.stringify(blResult.data, null, 2)
+                      : String(blResult.data)}
+                  </pre>
+                </div>
+              ) : (
+                <div className="bg-red-50 border border-red-200 rounded p-3">
+                  <p className="text-xs font-semibold text-red-700">❌ 오류</p>
+                  <p className="text-xs text-red-600 mt-1">{blResult.msg}</p>
+                </div>
+              )
+          )}
+        </div>
+      )}
 
       {showForm && (
         <form onSubmit={handleSubmit} className="bg-gray-50 border rounded p-4 space-y-3 text-sm">

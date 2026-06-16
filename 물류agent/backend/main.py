@@ -1,15 +1,17 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from database import engine, Base
+from database import engine, Base, SessionLocal, ensure_schema_updates
 from routers import drivers, vehicles, deliveries, ai_agent, platform
+from services.platform_sync import sync_drivers_to_platform
 
 Base.metadata.create_all(bind=engine)
+ensure_schema_updates()
 
 app = FastAPI(title="물류 Agent API", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["http://localhost:3001"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -20,6 +22,15 @@ app.include_router(vehicles.router, prefix="/api/vehicles", tags=["차량관리"
 app.include_router(deliveries.router, prefix="/api/deliveries", tags=["화물관리"])
 app.include_router(ai_agent.router, prefix="/api/ai", tags=["AI 배차"])
 app.include_router(platform.router, prefix="/api/platform", tags=["플랫폼 연동"])
+
+
+@app.on_event("startup")
+def startup():
+    db = SessionLocal()
+    try:
+        sync_drivers_to_platform(db)
+    finally:
+        db.close()
 
 
 @app.get("/")

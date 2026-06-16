@@ -188,22 +188,43 @@ CREATE TABLE IF NOT EXISTS collected_release (
     unit         VARCHAR(10)   NOT NULL COMMENT '야드/장/개',
     due_date     DATE,
     status       VARCHAR(20)   NOT NULL DEFAULT '생산중' COMMENT '생산중/출고완료',
+    label_code   VARCHAR(9)    NULL COMMENT '라벨코드 (케어라벨사 출고 시 필수)',
     collected_at DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fk_collected_company FOREIGN KEY (company_id) REFERENCES company_info(id),
     INDEX idx_company_id (company_id),
     INDEX idx_item_name  (item_name),
+    INDEX idx_status     (status),
+    INDEX idx_label_code (label_code)
+);
+
+CREATE TABLE IF NOT EXISTS collected_incoming (
+    id            INT AUTO_INCREMENT PRIMARY KEY,
+    company_id    INT           NOT NULL COMMENT '입고 받는 회사',
+    material_name VARCHAR(100)  NOT NULL COMMENT '원자재명',
+    quantity      DECIMAL(10,1) NOT NULL,
+    unit          VARCHAR(10)   NOT NULL,
+    origin        VARCHAR(20)   NOT NULL COMMENT '출발지: 인천항/부산항',
+    due_date      DATE,
+    status        VARCHAR(20)   NOT NULL DEFAULT '대기중' COMMENT '대기중/운송중/입고완료',
+    created_at    DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_incoming_company FOREIGN KEY (company_id) REFERENCES company_info(id),
+    INDEX idx_company_id (company_id),
+    INDEX idx_origin     (origin),
     INDEX idx_status     (status)
 );
 
 CREATE TABLE IF NOT EXISTS dispatch (
-    id          INT AUTO_INCREMENT PRIMARY KEY,
-    company_id  INT          NOT NULL,
-    destination VARCHAR(20)  NOT NULL COMMENT '인천항 / 부산항',
-    weight_kg   DECIMAL(8,1),
-    due_date    DATE,
-    pickup_date DATE         COMMENT 'AI 산출 픽업일',
-    status      VARCHAR(20)  NOT NULL DEFAULT '대기' COMMENT '대기/배차완료/운행중/완료',
-    created_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    id                 INT AUTO_INCREMENT PRIMARY KEY,
+    company_id         INT          NOT NULL,
+    label_code         VARCHAR(9)   NULL COMMENT '연동 라벨코드',
+    destination        VARCHAR(20)  NOT NULL COMMENT '인천항 / 부산항',
+    weight_kg          DECIMAL(8,1),
+    due_date           DATE,
+    pickup_date        DATE         COMMENT 'AI 산출 픽업일',
+    status             VARCHAR(20)  NOT NULL DEFAULT '대기' COMMENT '대기/배차완료/운행중/완료',
+    trip_type          VARCHAR(10)  NOT NULL DEFAULT '편도' COMMENT '편도/왕복',
+    return_incoming_id INT          NULL COMMENT '귀로 입고건 ID (collected_incoming.id)',
+    created_at         DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fk_dispatch_company FOREIGN KEY (company_id) REFERENCES company_info(id)
 );
 

@@ -56,6 +56,14 @@ export default function StockTab({ onRefreshAgent }) {
     } catch (err) { alert(err.response?.data?.detail || '수정 실패'); }
   };
 
+  const handleDelete = async (id, name) => {
+    if (!window.confirm(`[${name}] 재고를 삭제하시겠습니까?`)) return;
+    try {
+      await stockApi.delete(id);
+      await load(); onRefreshAgent();
+    } catch (err) { alert(err.response?.data?.detail || '삭제 실패'); }
+  };
+
   const statusOf = (s) => {
     const qty = parseFloat(s.stock_qty);
     const safe = SAFE_STOCK[s.fabric_code] || 0;
@@ -119,11 +127,12 @@ export default function StockTab({ onRefreshAgent }) {
                 <th>안전재고</th>
                 <th>상태</th>
                 <th>최종 업데이트</th>
+                <th style={{ width: 60 }}>삭제</th>
               </tr>
             </thead>
             <tbody>
               {stocks.length === 0 && (
-                <tr><td colSpan={7} style={{ textAlign: 'center', color: '#9ca3af' }}>재고 데이터 없음</td></tr>
+                <tr><td colSpan={8} style={{ textAlign: 'center', color: '#9ca3af' }}>재고 데이터 없음</td></tr>
               )}
               {stocks.map(s => {
                 const st   = statusOf(s);
@@ -164,6 +173,12 @@ export default function StockTab({ onRefreshAgent }) {
                     </td>
                     <td style={{ fontSize: 11, color: '#9ca3af' }}>
                       {s.updated_at ? new Date(s.updated_at).toLocaleString('ko-KR') : '-'}
+                    </td>
+                    <td style={{ textAlign: 'center' }} onClick={e => e.stopPropagation()}>
+                      <button className="btn btn-danger" style={{ padding: '3px 8px', fontSize: 11 }}
+                        onClick={() => handleDelete(s.id, name)}>
+                        삭제
+                      </button>
                     </td>
                   </tr>
                 );

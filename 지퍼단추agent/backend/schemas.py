@@ -60,6 +60,13 @@ class ReleaseOut(BaseModel):
         from_attributes = True
 
 
+# ── 돌발상황 보고 ──────────────────────────────────────
+class IncidentReport(BaseModel):
+    release_id:               int
+    reason:                   str
+    new_estimated_completion: Optional[datetime] = None
+
+
 # ── AI Agent ──────────────────────────────────────────
 class AgentRequest(BaseModel):
     item_name:   str
@@ -81,3 +88,12 @@ class AgentResponse(BaseModel):
     warnings:        list[str]
     instructions:    list[str]
     is_valid:        bool
+
+
+# ── 플랫폼 보고 채널 ────────────────────────────────────
+class PlatformReportReply(BaseModel):
+    report_type: str
+    item_ref:    str
+    status:      str = "수신확인"
+    message:     str
+    payload:     Optional[dict] = None

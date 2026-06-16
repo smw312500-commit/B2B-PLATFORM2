@@ -6,13 +6,14 @@ from database import Base
 
 class Driver(Base):
     __tablename__ = "driver"
-    __table_args__ = {"schema": "company_logistics"}
+    __table_args__ = {"schema": "company_logistics", "mysql_charset": "utf8mb4"}
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(50), nullable=False)
     phone = Column(String(20))
     location_si = Column(String(20))
     location_gu = Column(String(20))
+    base_region = Column(String(20))
     status = Column(String(20), default="가용")  # 가용/운행중/휴무
 
     vehicles = relationship("Vehicle", back_populates="driver")
@@ -21,7 +22,7 @@ class Driver(Base):
 
 class Vehicle(Base):
     __tablename__ = "vehicle"
-    __table_args__ = {"schema": "company_logistics"}
+    __table_args__ = {"schema": "company_logistics", "mysql_charset": "utf8mb4"}
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     driver_id = Column(Integer, ForeignKey("company_logistics.driver.id"))
@@ -35,7 +36,7 @@ class Vehicle(Base):
 
 class Delivery(Base):
     __tablename__ = "delivery"
-    __table_args__ = {"schema": "company_logistics"}
+    __table_args__ = {"schema": "company_logistics", "mysql_charset": "utf8mb4"}
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     driver_id = Column(Integer, ForeignKey("company_logistics.driver.id"))
@@ -51,8 +52,23 @@ class Delivery(Base):
     pickup_date = Column(Date)
     complete_date = Column(Date)
     status = Column(String(20), default="배차대기")  # 배차대기/운행중/완료
-    empty_return = Column(String(20), default="미정")  # 빈차귀환/연결완료/미정
+    empty_return = Column(String(100), default="미정")  # 빈차귀환/연결완료/미정
     created_at = Column(DateTime, server_default=func.now())
 
     driver = relationship("Driver", back_populates="deliveries")
     vehicle = relationship("Vehicle", back_populates="deliveries")
+
+
+class PlatformChannelMessage(Base):
+    __tablename__ = "platform_channel_message"
+    __table_args__ = {"schema": "company_logistics", "mysql_charset": "utf8mb4"}
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    direction = Column(String(20), nullable=False)  # inbound / outbound
+    event_type = Column(String(50), nullable=False)
+    title = Column(String(100), nullable=False)
+    summary = Column(Text, nullable=False)
+    status = Column(String(40), nullable=False)
+    related_delivery_id = Column(Integer)
+    payload_json = Column(Text)
+    created_at = Column(DateTime, server_default=func.now())

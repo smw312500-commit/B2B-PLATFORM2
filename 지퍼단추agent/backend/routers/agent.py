@@ -2,10 +2,10 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from database import get_db
 from models import ZipperStock, ZipperRelease
-from schemas import AgentRequest, AgentResponse
-from services.ai_agent import calculate_agent_result, SAFE_STOCK
+from schemas import AgentRequest, AgentResponse, PlatformReportReply
+from services.ai_agent import calculate_agent_result, build_agent_status
+from services.platform_report_state import get_report_status_snapshot, record_platform_reply
 from services.validator import validate_item_code
-from datetime import date
 
 router = APIRouter(prefix="/agent", tags=["AI Agent"])
 
@@ -30,43 +30,32 @@ def validate(item_name: str):
 
 @router.get("/status")
 def agent_status(db: Session = Depends(get_db)):
+    """지퍼단추사 AI Agent 현재상황 종합 판단
+
+    재고/원자재/진행주문/납기/트렌드를 규칙 기반으로 판단해 반환한다.
+    플랫폼은 이 요약 결과만 받고 자사 raw DB를 직접 조회하지 않는다.
+    """
     stocks = db.query(ZipperStock).all()
+    raw_stocks = {s.material_name: float(s.stock_qty) for s in stocks}
     active_releases = (
         db.query(ZipperRelease)
         .filter(ZipperRelease.status == "생산중")
         .order_by(ZipperRelease.due_date)
         .all()
     )
+    status = build_agent_status(db, raw_stocks, active_releases)
+    status["platform_report_status"] = get_report_status_snapshot()
+    return status
 
-    stock_map = {s.material_name: float(s.stock_qty) for s in stocks}
-    stock_list = [
-        {"material_name": s.material_name, "unit": s.unit, "stock_qty": float(s.stock_qty)}
-        for s in stocks
-    ]
 
-    warnings = []
-    for name, safe_qty in SAFE_STOCK.items():
-        qty = stock_map.get(name, 0)
-        unit = next((s.unit for s in stocks if s.material_name == name), "")
-        if qty == 0:
-            warnings.append(f"❌ {name} 재고 없음 — 긴급 발주 필요")
-        elif qty <= safe_qty:
-            warnings.append(f"⚠ {name} 안전재고 이하 ({qty}{unit})")
-
-    today = date.today()
-    orders_summary = []
-    for r in active_releases:
-        days_remaining = (r.due_date - today).days
-        orders_summary.append({
-            "id":            r.id,
-            "item_name":     r.item_name,
-            "release_qty":   r.release_qty,
-            "due_date":      r.due_date.isoformat(),
-            "days_remaining": days_remaining,
-        })
-
-    return {
-        "stocks":         stock_list,
-        "stock_warnings": warnings,
-        "active_orders":  orders_summary,
-    }
+@router.post("/report-reply")
+def report_reply(body: PlatformReportReply):
+    """플랫폼agent가 보낸 수신확인/오류/추가 지시를 보고 채널에 기록"""
+    message = record_platform_reply(
+        report_type=body.report_type,
+        item_ref=body.item_ref,
+        status=body.status,
+        message=body.message,
+        payload=body.payload,
+    )
+    return {"received": True, "message": message}

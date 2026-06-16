@@ -1,6 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import * as XLSX from 'xlsx'
-import { getReleases, createRelease, validateLabelCode, deleteReleasesBulk } from '../../services/api'
+import {
+  createRelease,
+  deleteReleasesBulk,
+  getAgentStatus,
+  getMachines,
+  getReleases,
+  machineAction,
+  validateLabelCode,
+} from '../../services/api'
 import MachineLayout from '../MachineLayout'
 
 function today() { return new Date().toISOString().split('T')[0] }
@@ -27,20 +35,19 @@ function excelDateToISO(val) {
   return null
 }
 
-// 라벨코드 9자리 클라이언트 유효성 검사
-const BRAND   = new Set(['W'])
-const SEASON  = new Set(['1','2','3','4'])
-const GENDER  = new Set(['W','M'])
-const ITEM    = new Set(['T','P','J','D'])
-const FABRIC  = new Set(['C','P','L','W','M'])
-const COLOR   = new Set(['BK','WH','NV','GY','BE','RD'])
+const BRAND = new Set(['W'])
+const SEASON = new Set(['1','2','3','4'])
+const GENDER = new Set(['W','M'])
+const ITEM = new Set(['T','P','J','D'])
+const FABRIC = new Set(['C','P','L','W','M'])
+const COLOR = new Set(['BK','WH','NV','GY','BE','RD'])
 
 function validateCode(code) {
   if (!code || code.length !== 9) return '9자리가 아님'
-  if (!BRAND.has(code[0]))  return `브랜드코드 오류: ${code[0]}`
+  if (!BRAND.has(code[0])) return `브랜드코드 오류: ${code[0]}`
   if (!SEASON.has(code[1])) return `계절코드 오류: ${code[1]}`
   if (!GENDER.has(code[2])) return `성별코드 오류: ${code[2]}`
-  if (!ITEM.has(code[3]))   return `품목코드 오류: ${code[3]}`
+  if (!ITEM.has(code[3])) return `품목코드 오류: ${code[3]}`
   if (!FABRIC.has(code[4])) return `원단코드 오류: ${code[4]}`
   if (!/^\d{2}$/.test(code.slice(5,7))) return `스타일번호 오류: ${code.slice(5,7)}`
   if (!COLOR.has(code.slice(7,9))) return `컬러코드 오류: ${code.slice(7,9)}`
@@ -51,10 +58,10 @@ function validateRow(row, idx) {
   const errors = []
   const codeErr = validateCode(row.label_code)
   if (codeErr) errors.push(`${idx+1}행: 라벨코드 ${codeErr}`)
-  if (!row.release_qty || isNaN(Number(row.release_qty)) || Number(row.release_qty) <= 0)
+  if (!row.release_qty || isNaN(Number(row.release_qty)) || Number(row.release_qty) <= 0) {
     errors.push(`${idx+1}행: 주문량이 올바르지 않습니다`)
-  if (!row.due_date)
-    errors.push(`${idx+1}행: 납기일 형식 오류 (YYYY-MM-DD)`)
+  }
+  if (!row.due_date) errors.push(`${idx+1}행: 납기일 형식 오류 (YYYY-MM-DD)`)
   return errors
 }
 
@@ -70,157 +77,144 @@ function downloadTemplate() {
   XLSX.writeFile(wb, '생산등록_양식.xlsx')
 }
 
-// ── 기계 state 관리 ──────────────────────────────────
-const LS_KEY      = 'label_machines_v1'
-const PROD_LOG_KEY = 'label_prod_log_v1'   // 기계 초기화해도 유지되는 생산 이력
-const SPEED       = 800 / 3600   // 장/초
+const SPEED = 800 / 3600
 
-function saveProdLog(labelCode, patch) {
-  try {
-    const log = JSON.parse(localStorage.getItem(PROD_LOG_KEY) || '{}')
-    log[labelCode] = { ...(log[labelCode] || {}), ...patch }
-    localStorage.setItem(PROD_LOG_KEY, JSON.stringify(log))
-  } catch {}
-}
-
-const MACHINE_INIT = [1,2,3,4,5,6].map((i) => ({
-  id: i, name: `인쇄기 ${i}호`, status: '대기중',
-  label_code: null, total: 0, produced: 0,
-  started_at: null, finished_at: null,
-}))
-
-function loadMachines() {
-  try {
-    const raw = localStorage.getItem(LS_KEY)
-    if (!raw) return MACHINE_INIT
-    return JSON.parse(raw).map((m) => {
-      const started  = m.started_at  ? new Date(m.started_at)  : null
-      const finished = m.finished_at ? new Date(m.finished_at) : null
-      if (m.status === '가동중' && started) {
-        const elapsed = (Date.now() - started.getTime()) / 1000
-        const next = Math.min(m.produced + elapsed * SPEED, m.total)
-        if (next >= m.total) {
-          const finishedAt = new Date()
-          // 다른 탭에 있는 동안 완료된 경우 → prod log에 즉시 저장
-          if (m.label_code) saveProdLog(m.label_code, { finished_at: finishedAt.toISOString() })
-          return { ...m, produced: m.total, status: '완료', started_at: started, finished_at: finishedAt }
-        }
-        return { ...m, produced: next, started_at: started, finished_at: null }
-      }
-      return { ...m, started_at: started, finished_at: finished }
+function getApplicableRecommendationPlans(recommendations = []) {
+  return recommendations
+    .filter((item) => item.apply_required)
+    .filter((item) => {
+      const releaseIds = item.apply_release_ids || []
+      return releaseIds.length > 0 || (item.queue_release_ids || []).length > 0
     })
-  } catch { return MACHINE_INIT }
 }
 
-export default function ProductionTab({ searched }) {
-  const [releases, setReleases]     = useState([])
-  const [showForm, setShowForm]     = useState(false)
-  const [showExcel, setShowExcel]   = useState(false)
-  const [form, setForm]             = useState({ label_code: '', release_qty: '', due_date: '' })
+function advanceMachine(machine) {
+  if (machine.status !== '가동중' || !machine.running_started_at || machine.total_qty <= 0) return machine
+  const next = Math.min(Number(machine.produced_qty) + SPEED, machine.total_qty)
+  if (next >= machine.total_qty) {
+    return {
+      ...machine,
+      produced_qty: machine.total_qty,
+      remaining_qty: 0,
+      status: '완료',
+      running_started_at: null,
+      finished_at: new Date().toISOString(),
+      estimated_completion_at: new Date().toISOString(),
+    }
+  }
+  return {
+    ...machine,
+    produced_qty: next,
+    remaining_qty: Math.max(machine.total_qty - next, 0),
+  }
+}
+
+export default function ProductionTab({ searched, onAgentStatusSync }) {
+  const [releases, setReleases] = useState([])
+  const [machines, setMachines] = useState([])
+  const [agentStatus, setAgentStatus] = useState(null)
+  const [showForm, setShowForm] = useState(false)
+  const [showExcel, setShowExcel] = useState(false)
+  const [form, setForm] = useState({ label_code: '', release_qty: '', due_date: '' })
   const [validation, setValidation] = useState(null)
-
-  const [previewRows, setPreviewRows]   = useState([])
-  const [excelErrors, setExcelErrors]   = useState([])
-  const [uploading, setUploading]       = useState(false)
+  const [previewRows, setPreviewRows] = useState([])
+  const [excelErrors, setExcelErrors] = useState([])
+  const [uploading, setUploading] = useState(false)
   const [uploadResult, setUploadResult] = useState(null)
-  const fileRef = useRef(null)
-
-  const [checked, setChecked]   = useState(new Set())
+  const [checked, setChecked] = useState(new Set())
   const [deleting, setDeleting] = useState(false)
-
-  // 기계 state
-  const [machines, setMachines]   = useState(loadMachines)
   const [selMachine, setSelMachine] = useState(null)
-  const timers = useRef({})
+  const [machineBusy, setMachineBusy] = useState(false)
+  const fileRef = useRef(null)
+  const autoCompletingRef = useRef(new Set())
 
-  // machines 변경 시 localStorage 저장
-  useEffect(() => {
-    localStorage.setItem(LS_KEY, JSON.stringify(machines))
-  }, [machines])
+  const fetchAll = async () => {
+    const [releaseRes, machineRes, statusRes] = await Promise.all([
+      getReleases(),
+      getMachines(),
+      getAgentStatus(),
+    ])
+    setReleases(releaseRes.data.filter((r) => r.status === '생산중'))
+    setMachines(machineRes.data)
+    setAgentStatus(statusRes.data)
+    onAgentStatusSync?.(statusRes.data)
+  }
 
-  // 마운트 시: 가동중 타이머 재시작 + 완료된 기계 prod log 동기화
+  const syncSnapshotToState = (snapshot) => {
+    setReleases(snapshot.releases)
+    setMachines(snapshot.machines)
+    setAgentStatus(snapshot.agentStatus)
+    onAgentStatusSync?.(snapshot.agentStatus)
+  }
+
+  const fetchAllSnapshot = async () => {
+    const [releaseRes, machineRes, statusRes] = await Promise.all([
+      getReleases(),
+      getMachines(),
+      getAgentStatus(),
+    ])
+
+    return {
+      releases: releaseRes.data.filter((r) => !r.finished_at),
+      machines: machineRes.data,
+      agentStatus: statusRes.data,
+    }
+  }
+
   useEffect(() => {
-    machines.forEach((m) => {
-      if (m.status === '가동중' && m.produced < m.total) _startTimer(m.id)
-      // 완료 상태인데 prod log에 누락된 경우 보정
-      if (m.status === '완료' && m.label_code) {
-        saveProdLog(m.label_code, {
-          ...(m.started_at  ? { started_at:  new Date(m.started_at).toISOString()  } : {}),
-          ...(m.finished_at ? { finished_at: new Date(m.finished_at).toISOString() } : {}),
-        })
+    fetchAll()
+  }, [])
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setMachines((prev) => prev.map(advanceMachine))
+    }, 1000)
+    return () => clearInterval(timer)
+  }, [])
+
+  useEffect(() => {
+    if (machineBusy) {
+      return
+    }
+
+    const activeKeys = new Set()
+    let pendingMachine = null
+
+    machines.forEach((machine) => {
+      const completionKey = `${machine.id}:${machine.release_id}`
+      if (machine.status === '완료' && machine.release_id && machine.total_qty > 0) {
+        activeKeys.add(completionKey)
+        if (!pendingMachine && !autoCompletingRef.current.has(completionKey)) {
+          autoCompletingRef.current.add(completionKey)
+          pendingMachine = machine
+        }
       }
     })
-    return () => Object.values(timers.current).forEach(clearInterval)
-  }, []) // eslint-disable-line
 
-  const _startTimer = (id) => {
-    if (timers.current[id]) return
-    timers.current[id] = setInterval(() => {
-      setMachines((prev) => prev.map((m) => {
-        if (m.id !== id) return m
-        const next = Math.min(m.produced + SPEED, m.total)
-        if (next >= m.total) {
-          clearInterval(timers.current[id]); delete timers.current[id]
-          const finishedAt = new Date()
-          if (m.label_code) saveProdLog(m.label_code, { finished_at: finishedAt.toISOString() })
-          return { ...m, produced: m.total, status: '완료', finished_at: finishedAt }
-        }
-        return { ...m, produced: next }
-      }))
-    }, 1000)
-  }
+    autoCompletingRef.current.forEach((key) => {
+      if (!activeKeys.has(key)) {
+        autoCompletingRef.current.delete(key)
+      }
+    })
 
-  const machineHandlers = {
-    onStart: (id) => {
-      const startTime = new Date()
-      setMachines((prev) => {
-        const m = prev.find((x) => x.id === id)
-        if (m?.label_code) saveProdLog(m.label_code, { started_at: startTime.toISOString(), finished_at: null })
-        return prev.map((x) => x.id === id ? { ...x, status: '가동중', started_at: startTime, finished_at: null } : x)
-      })
-      _startTimer(id)
-    },
-    onStop: (id) => {
-      if (timers.current[id]) { clearInterval(timers.current[id]); delete timers.current[id] }
-      setMachines((prev) => prev.map((m) => m.id === id ? { ...m, status: '대기중' } : m))
-    },
-    onReset: (id) => {
-      if (timers.current[id]) { clearInterval(timers.current[id]); delete timers.current[id] }
-      setMachines((prev) => prev.map((m) => m.id === id
-        ? { ...m, produced: 0, status: '대기중', label_code: null, total: 0, started_at: null, finished_at: null } : m))
-    },
-    onAssign: (id, labelCode) => {
-      if (timers.current[id]) { clearInterval(timers.current[id]); delete timers.current[id] }
-      const rel = releases.find((r) => r.label_code === labelCode)
-      setMachines((prev) => prev.map((m) => m.id === id ? {
-        ...m, label_code: labelCode || null,
-        total: rel ? rel.release_qty : 0,
-        produced: 0, status: '대기중', started_at: null, finished_at: null,
-      } : m))
-      setSelMachine(null)
-    },
-    onStatusChange: (id, st) => {
-      if (timers.current[id]) { clearInterval(timers.current[id]); delete timers.current[id] }
-      setMachines((prev) => prev.map((m) => m.id === id ? { ...m, status: st, label_code: st === '점검중' ? null : m.label_code } : m))
-      setSelMachine(null)
-    },
-    onSelectToggle: (id) => setSelMachine((prev) => prev === id ? null : id),
-  }
+    if (pendingMachine) {
+      runMachineAction(pendingMachine.id, { action: 'complete' })
+    }
+  }, [machineBusy, machines])
 
-  const fetchReleases = async () => {
-    const res = await getReleases()
-    setReleases(res.data.filter((r) => r.status === '생산중'))
-  }
-
-  useEffect(() => { fetchReleases() }, [])
+  const filtered = searched ? releases.filter((r) => inRange(r.due_date, searched)) : releases
 
   const toggleOne = (id) => setChecked((prev) => {
-    const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next
+    const next = new Set(prev)
+    next.has(id) ? next.delete(id) : next.add(id)
+    return next
   })
+
   const toggleAll = () => {
     if (checked.size === filtered.length) setChecked(new Set())
     else setChecked(new Set(filtered.map((r) => r.id)))
   }
+
   const handleDelete = async () => {
     if (checked.size === 0) return
     if (!confirm(`선택한 ${checked.size}건을 삭제하시겠습니까?`)) return
@@ -228,10 +222,12 @@ export default function ProductionTab({ searched }) {
     try {
       await deleteReleasesBulk([...checked])
       setChecked(new Set())
-      fetchReleases()
+      await fetchAll()
     } catch (err) {
       alert(err.response?.data?.detail || '삭제 실패')
-    } finally { setDeleting(false) }
+    } finally {
+      setDeleting(false)
+    }
   }
 
   const handleValidate = async () => {
@@ -239,7 +235,9 @@ export default function ProductionTab({ searched }) {
     try {
       const res = await validateLabelCode(form.label_code)
       setValidation(res.data)
-    } catch { setValidation({ valid: false, message: '서버 오류' }) }
+    } catch {
+      setValidation({ valid: false, message: '서버 오류' })
+    }
   }
 
   const handleSubmit = async (e) => {
@@ -247,9 +245,12 @@ export default function ProductionTab({ searched }) {
     try {
       await createRelease({ ...form, release_qty: Number(form.release_qty) })
       setForm({ label_code: '', release_qty: '', due_date: '' })
-      setValidation(null); setShowForm(false)
-      fetchReleases()
-    } catch (err) { alert(err.response?.data?.detail || '등록 실패') }
+      setValidation(null)
+      setShowForm(false)
+      await fetchAll()
+    } catch (err) {
+      alert(err.response?.data?.detail || '등록 실패')
+    }
   }
 
   const handleFileChange = (e) => {
@@ -258,14 +259,14 @@ export default function ProductionTab({ searched }) {
     setUploadResult(null)
     const reader = new FileReader()
     reader.onload = (evt) => {
-      const wb   = XLSX.read(evt.target.result, { type: 'array', cellDates: true })
-      const ws   = wb.Sheets[wb.SheetNames[0]]
-      const raw  = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
+      const wb = XLSX.read(evt.target.result, { type: 'array', cellDates: true })
+      const ws = wb.Sheets[wb.SheetNames[0]]
+      const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
       const dataRows = raw.slice(1).filter((r) => r.some((c) => c !== ''))
       const rows = dataRows.map((r) => ({
-        label_code:  String(r[0] ?? '').trim().toUpperCase(),
+        label_code: String(r[0] ?? '').trim().toUpperCase(),
         release_qty: r[1],
-        due_date:    excelDateToISO(r[2]),
+        due_date: excelDateToISO(r[2]),
       }))
       const errors = rows.flatMap((row, i) => validateRow(row, i))
       setPreviewRows(rows)
@@ -291,20 +292,156 @@ export default function ProductionTab({ searched }) {
     setUploading(false)
     setUploadResult({ success, fail: failDetails.length, failDetails })
     if (failDetails.length === 0) {
-      setPreviewRows([]); setExcelErrors([])
+      setPreviewRows([])
+      setExcelErrors([])
       if (fileRef.current) fileRef.current.value = ''
     }
-    fetchReleases()
+    await fetchAll()
   }
 
   const handleExcelClose = () => {
-    setShowExcel(false); setPreviewRows([]); setExcelErrors([]); setUploadResult(null)
+    setShowExcel(false)
+    setPreviewRows([])
+    setExcelErrors([])
+    setUploadResult(null)
     if (fileRef.current) fileRef.current.value = ''
   }
 
-  const filtered = searched
-    ? releases.filter((r) => inRange(r.due_date, searched))
-    : releases
+  const runMachineAction = async (id, payload) => {
+    setMachineBusy(true)
+    try {
+      await machineAction(id, payload)
+      await fetchAll()
+    } catch (err) {
+      alert(err.response?.data?.detail || '기계 상태 변경 실패')
+    } finally {
+      setMachineBusy(false)
+    }
+  }
+
+  const machineHandlers = {
+    onStart: (id) => runMachineAction(id, { action: 'start' }),
+    onStop: (id) => runMachineAction(id, { action: 'stop' }),
+    onComplete: (id) => runMachineAction(id, { action: 'complete' }),
+    onAssign: (id, releaseId) => runMachineAction(id, {
+      action: 'assign',
+      release_id: releaseId ? Number(releaseId) : null,
+    }),
+    onStatusChange: (id, st) => runMachineAction(id, { action: 'status_change', status: st }),
+    onSelectToggle: (id) => setSelMachine((prev) => (prev === id ? null : id)),
+  }
+
+  const machineRecommendations = agentStatus?.machine_recommendations || []
+  const applicableRecommendations = machineRecommendations.filter((item) => {
+    if (!item.recommended_release_id) return false
+    if (item.machine_status !== '대기중') return false
+    const machine = machines.find((m) => m.id === item.machine_id)
+    if (!machine) return false
+    return machine.release_id !== item.recommended_release_id
+  })
+
+  const applyRecommendedAssignments = async () => {
+    if (applicableRecommendations.length === 0) return
+    setMachineBusy(true)
+    try {
+      await Promise.all(
+        applicableRecommendations.map((item) =>
+          machineAction(item.machine_id, {
+            action: 'assign',
+            release_id: item.recommended_release_id,
+          })
+        )
+      )
+      await fetchAll()
+    } catch (err) {
+      alert(err.response?.data?.detail || '기계배정 적용 실패')
+    } finally {
+      setMachineBusy(false)
+    }
+  }
+
+  const applicableRecommendationPlans = machineRecommendations
+    .filter((item) => item.apply_required)
+    .filter((item) => {
+      const releaseIds = item.apply_release_ids || []
+      return releaseIds.length > 0 || (item.queue_release_ids || []).length > 0
+    })
+
+  const applyRecommendedAssignmentPlans = async () => {
+    if (applicableRecommendationPlans.length === 0) return
+    setMachineBusy(true)
+    try {
+      for (const item of applicableRecommendationPlans) {
+        await machineAction(item.machine_id, {
+          action: 'apply_plan',
+          release_ids: item.apply_release_ids || [],
+        })
+      }
+      await fetchAll()
+    } catch (err) {
+      alert(err.response?.data?.detail || '湲곌퀎諛곗젙 ?곸슜 ?ㅽ뙣')
+    } finally {
+      setMachineBusy(false)
+    }
+  }
+
+  const handleAutoAssign = async () => {
+    setMachineBusy(true)
+    try {
+      const snapshot = await fetchAllSnapshot()
+      syncSnapshotToState(snapshot)
+
+      const freshPlans = getApplicableRecommendationPlans(
+        snapshot.agentStatus?.machine_recommendations || []
+      )
+
+      if (freshPlans.length === 0) {
+        alert('?꾩옱 ?곹깭湲곗?濡?異붽? 諛곗젙???놁뒿?덈떎.')
+        return
+      }
+
+      for (const item of freshPlans) {
+        await machineAction(item.machine_id, {
+          action: 'apply_plan',
+          release_ids: item.apply_release_ids || [],
+        })
+      }
+
+      await fetchAll()
+    } catch (err) {
+      alert(err.response?.data?.detail || '?먮룞諛곗꽕 ?ㅽ뙣')
+    } finally {
+      setMachineBusy(false)
+    }
+  }
+
+  const findReleaseAssignment = (releaseId) => {
+    for (const machine of machines) {
+      if (machine.release_id === releaseId) {
+        return {
+          machine,
+          isCurrent: true,
+          queueSequence: null,
+        }
+      }
+
+      const queueIndex = (machine.queue_items || []).findIndex((item) => item.release_id === releaseId)
+      if (queueIndex >= 0) {
+        return {
+          machine: {
+            ...machine,
+            status: `대기열 ${queueIndex + 1}순위`,
+            total_qty: 0,
+            produced_qty: 0,
+          },
+          isCurrent: false,
+          queueSequence: queueIndex + 1,
+        }
+      }
+    }
+
+    return null
+  }
 
   return (
     <div className="space-y-6">
@@ -327,7 +464,6 @@ export default function ProductionTab({ searched }) {
         </div>
       </div>
 
-      {/* 직접 등록 폼 */}
       {showForm && (
         <form onSubmit={handleSubmit} className="bg-gray-50 border rounded p-4 space-y-4 text-sm">
           <div className="grid grid-cols-3 gap-3">
@@ -367,7 +503,6 @@ export default function ProductionTab({ searched }) {
         </form>
       )}
 
-      {/* 엑셀 업로드 패널 */}
       {showExcel && (
         <div className="border rounded p-4 bg-gray-50 space-y-4 text-sm">
           <div className="flex items-start justify-between">
@@ -446,7 +581,6 @@ export default function ProductionTab({ searched }) {
         </div>
       )}
 
-      {/* 생산중 목록 */}
       <div>
         <div className="flex items-center justify-between mb-2">
           <p className="text-sm font-medium text-gray-600">생산중 목록 ({filtered.length}건)</p>
@@ -470,20 +604,23 @@ export default function ProductionTab({ searched }) {
                 <th className="px-4 py-2 border">주문량</th>
                 <th className="px-4 py-2 border">납기일</th>
                 <th className="px-4 py-2 border">D-day</th>
+                <th className="px-4 py-2 border">배정 기계</th>
                 <th className="px-4 py-2 border">시작 시간</th>
                 <th className="px-4 py-2 border">완료 시간</th>
               </tr>
             </thead>
             <tbody>
               {filtered.length === 0 && (
-                <tr><td colSpan={7} className="px-4 py-4 text-center text-gray-400">생산중인 주문 없음</td></tr>
+                <tr><td colSpan={8} className="px-4 py-4 text-center text-gray-400">생산중인 주문 없음</td></tr>
               )}
               {filtered.map((r) => {
                 const d = Math.ceil((new Date(r.due_date) - new Date(today())) / 86400000)
-                const mach = machines.find((m) => m.label_code === r.label_code)
-                const produced = mach ? Math.floor(mach.produced) : 0
-                const total    = r.release_qty
-                const pct      = total > 0 ? Math.min((produced / total) * 100, 100) : 0
+                const assignment = findReleaseAssignment(r.id)
+                const mach = assignment?.machine || null
+                const isCurrentMachineJob = assignment?.isCurrent || false
+                const produced = isCurrentMachineJob && mach ? Math.floor(mach.produced_qty) : 0
+                const total = r.release_qty
+                const pct = total > 0 ? Math.min((produced / total) * 100, 100) : 0
                 return (
                   <tr key={r.id} onClick={() => toggleOne(r.id)}
                     className={`cursor-pointer hover:bg-gray-50 ${checked.has(r.id) ? 'bg-red-50' : ''}`}>
@@ -499,7 +636,7 @@ export default function ProductionTab({ searched }) {
                             {produced.toLocaleString()} / {total.toLocaleString()}장
                           </span>
                         </div>
-                        {mach && mach.total > 0 && (
+                        {mach && mach.total_qty > 0 && (
                           <div className="w-full bg-gray-200 rounded-full h-1.5">
                             <div className={`h-1.5 rounded-full ${mach.status === '완료' ? 'bg-blue-500' : 'bg-green-500'}`}
                               style={{ width: `${pct}%` }} />
@@ -513,12 +650,20 @@ export default function ProductionTab({ searched }) {
                         d < 2 ? 'bg-red-100 text-red-700' : d < 5 ? 'bg-yellow-100 text-yellow-700' : 'bg-blue-100 text-blue-700'
                       }`}>D-{d}</span>
                     </td>
+                    <td className="px-4 py-2 border text-xs">
+                      {mach ? (
+                        <div className="space-y-0.5">
+                          <p className="font-medium text-gray-700">{mach.name}</p>
+                          <p className="text-gray-500">{mach.status}</p>
+                        </div>
+                      ) : <span className="text-gray-400">미배정</span>}
+                    </td>
                     <td className="px-4 py-2 border text-xs text-gray-500">
-                      {mach?.started_at ? new Date(mach.started_at).toLocaleString('ko-KR') : '-'}
+                      {r.started_at ? new Date(r.started_at).toLocaleString('ko-KR') : '-'}
                     </td>
                     <td className="px-4 py-2 border text-xs">
-                      {mach?.finished_at
-                        ? <span className="text-blue-600 font-medium">{new Date(mach.finished_at).toLocaleString('ko-KR')}</span>
+                      {r.finished_at
+                        ? <span className="text-blue-600 font-medium">{new Date(r.finished_at).toLocaleString('ko-KR')}</span>
                         : <span className="text-gray-400">-</span>
                       }
                     </td>
@@ -530,16 +675,34 @@ export default function ProductionTab({ searched }) {
         </div>
       </div>
 
-      {/* 기계 배치 */}
-      <div className="border rounded-xl p-5 bg-gray-50">
+      <div className="border rounded-xl p-5 bg-gray-50 space-y-4">
+        <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3">
+          <p className="text-sm font-semibold text-blue-900 mb-2">오늘 기계배정 추천</p>
+          {machineRecommendations.length === 0 ? (
+            <p className="text-xs text-blue-700">추천할 기계 배정이 없습니다.</p>
+          ) : (
+            <div className="space-y-1.5">
+              {machineRecommendations.map((item) => (
+                <p key={item.machine_id} className="text-xs text-blue-900">{item.summary}</p>
+              ))}
+            </div>
+          )}
+          <p className="text-[11px] text-blue-500 mt-2">자동 갱신 없음 · 생산 등록/기계 조작 후에만 서버 상태를 다시 조회합니다.</p>
+        </div>
+
         <MachineLayout
           machines={machines}
           releases={filtered}
           selected={selMachine}
+          recommendations={machineRecommendations}
+          busy={machineBusy}
+          onAutoAssign={handleAutoAssign}
+          canAutoAssign={releases.length > 0}
+          onApplyRecommendations={applyRecommendedAssignmentPlans}
+          canApplyRecommendations={applicableRecommendationPlans.length > 0}
           {...machineHandlers}
         />
       </div>
-
     </div>
   )
 }

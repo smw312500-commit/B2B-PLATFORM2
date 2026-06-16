@@ -4,43 +4,44 @@
   "total_garment_units": 6000000,
   "shipment_batches": 162,
   "production_batches": 486,
-  "material_receipts": 128,
+  "material_receipts": 186,
+  "round_trip_demo_import_rows": 10,
   "logistics_performance_rows": 162,
-  "severe_material_delay_rows_21d_plus": 15,
-  "late_production_rows": 17,
-  "tight_production_rows_buffer_5d_or_less": 113,
+  "severe_material_delay_rows_21d_plus": 16,
+  "late_production_rows": 11,
+  "tight_production_rows_buffer_5d_or_less": 109,
   "year_summary": {
     "2023": {
       "garment_units": 1520941,
       "shipment_batches": 40,
-      "avg_material_delay_days": 3.03,
+      "avg_material_delay_days": 2.52,
       "material_delay_21d_count": 0,
-      "avg_production_due_buffer_days": 24.8,
+      "avg_production_due_buffer_days": 25.0,
       "tight_or_late_production_count": 0
     },
     "2024": {
       "garment_units": 1504240,
       "shipment_batches": 40,
-      "avg_material_delay_days": 3.69,
+      "avg_material_delay_days": 3.34,
       "material_delay_21d_count": 0,
-      "avg_production_due_buffer_days": 25.35,
+      "avg_production_due_buffer_days": 25.28,
       "tight_or_late_production_count": 0
     },
     "2025": {
       "garment_units": 1482220,
       "shipment_batches": 40,
-      "avg_material_delay_days": 9.78,
-      "material_delay_21d_count": 6,
+      "avg_material_delay_days": 8.2,
+      "material_delay_21d_count": 7,
       "avg_production_due_buffer_days": 11.3,
       "tight_or_late_production_count": 0
     },
     "2026": {
       "garment_units": 1492599,
       "shipment_batches": 42,
-      "avg_material_delay_days": 11.47,
+      "avg_material_delay_days": 6.96,
       "material_delay_21d_count": 9,
-      "avg_production_due_buffer_days": 2.4,
-      "tight_or_late_production_count": 113
+      "avg_production_due_buffer_days": 2.56,
+      "tight_or_late_production_count": 109
     }
   },
   "intended_story": [

@@ -1,23 +1,37 @@
 @echo off
-title Fabric Agent - Start
+title Fabric Agent
+
+echo  [1/4] Checking Python packages...
+cd /d "%~dp0backend"
+pip install -r requirements.txt -q
+if errorlevel 1 ( echo [ERROR] pip install failed & pause & exit /b 1 )
+
+echo  [2/4] Checking Node packages...
+cd /d "%~dp0frontend"
+if not exist "node_modules" (
+    echo  node_modules not found - running npm install...
+    npm install
+    if errorlevel 1 ( echo [ERROR] npm install failed & pause & exit /b 1 )
+)
+
+if not exist "%~dp0backend\.env" (
+    copy "%~dp0backend\.env.example" "%~dp0backend\.env" >nul
+    echo  [!] backend\.env created - please edit DB_PASSWORD
+)
+
+echo  [3/4] Starting Backend  (http://localhost:8002)...
+start "Backend" cmd /k "cd /d %~dp0backend && uvicorn main:app --reload --port 8002"
+
+timeout /t 2 /nobreak >nul
+
+echo  [4/4] Starting Frontend (http://localhost:3000)...
+start "Frontend" cmd /k "cd /d %~dp0frontend && npm start"
+
+timeout /t 5 /nobreak >nul
 
 echo.
-echo ============================================
-echo  [1/2] Starting Backend (FastAPI :8001)
-echo ============================================
-start "Backend :8001" cmd /k "cd /d "%~dp0backend" && if not exist .env copy .env.example .env && if not exist venv python -m venv venv && call venv\Scripts\activate && pip install -r requirements.txt -q && uvicorn main:app --host 0.0.0.0 --port 8001 --reload"
-
-timeout /t 3 /nobreak > nul
-
-echo.
-echo ============================================
-echo  [2/2] Starting Frontend (React :3000)
-echo ============================================
-start "Frontend :3000" cmd /k "cd /d "%~dp0frontend" && npm install && npm start"
-
-echo.
-echo  Backend  : http://localhost:8001
-echo  Frontend : http://localhost:3000
-echo  API Docs : http://localhost:8001/docs
-echo.
-pause
+echo  ================================
+echo   Frontend : http://localhost:3000
+echo   API Docs : http://localhost:8002/docs
+echo  ================================
+start http://localhost:3000
