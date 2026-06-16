@@ -1,10 +1,10 @@
 import { useState } from 'react'
 import Header from './components/Header'
-import SidePanel from './components/SidePanel'
 import DashboardTab from './components/tabs/DashboardTab'
 import DispatchTab from './components/tabs/DispatchTab'
 import InsightTab from './components/tabs/InsightTab'
 import ReportChannelsTab from './components/tabs/ReportChannelsTab'
+import AIChatPanel from './components/AIChatPanel'
 
 const TABS = [
   { id: 'dashboard', label: '대시보드' },
@@ -15,6 +15,7 @@ const TABS = [
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard')
+  const [chatOpen, setChatOpen] = useState(false)
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-50">
@@ -39,7 +40,7 @@ export default function App() {
         </div>
       </div>
 
-      {/* 본문 + 우측 패널 */}
+      {/* 본문 */}
       <div className="flex flex-1 overflow-hidden">
         <main className="flex-1 overflow-y-auto p-5">
           {activeTab === 'dashboard' && <DashboardTab />}
@@ -47,15 +48,18 @@ export default function App() {
           {activeTab === 'report'    && <ReportChannelsTab />}
           {activeTab === 'insight'   && <InsightTab />}
         </main>
-
-        {/* 우측 고정 패널 */}
-        <aside className="w-64 border-l border-gray-200 bg-white flex-shrink-0 overflow-y-auto">
-          <div className="px-4 py-3 border-b border-gray-100">
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">현황 요약</p>
-          </div>
-          <SidePanel />
-        </aside>
       </div>
+
+      {/* AI 채팅 플로팅 버튼 */}
+      <button
+        onClick={() => setChatOpen(true)}
+        title="AI 인사이트 채팅"
+        className="fixed bottom-6 right-6 z-30 flex h-14 w-14 items-center justify-center rounded-full bg-slate-950 text-white shadow-lg transition-all hover:bg-slate-800 hover:scale-105 active:scale-95"
+      >
+        <span className="text-xl">🤖</span>
+      </button>
+
+      <AIChatPanel open={chatOpen} onClose={() => setChatOpen(false)} />
     </div>
   )
 }
