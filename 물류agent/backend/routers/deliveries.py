@@ -109,7 +109,29 @@ def assign_driver(
     driver = db.query(Driver).filter(Driver.id == driver_id).first()
     if not driver:
         raise HTTPException(status_code=404, detail="기사를 찾을 수 없습니다")
-    if driver.status != "가용" and delivery.driver_id != driver.id:
+    if not delivery.due_date and not pickup_date:
+        raise HTTPException(status_code=400, detail="납기일 또는 픽업일이 필요합니다")
+
+    resolved_pickup_date = pickup_date or calc_pickup_date(
+        delivery.due_date,
+        delivery.destination,
+        delivery.origin_si,
+    )
+    same_day_assignment = (
+        db.query(Delivery)
+        .filter(
+            Delivery.id != delivery.id,
+            Delivery.driver_id == driver.id,
+            Delivery.pickup_date == resolved_pickup_date,
+            Delivery.status != "완료",
+        )
+        .first()
+    )
+    if same_day_assignment:
+        raise HTTPException(status_code=400, detail="같은 픽업일에 이미 배정된 기사입니다")
+    if driver.status == "휴무":
+        raise HTTPException(status_code=400, detail="휴무 상태 기사는 배정할 수 없습니다")
+    if driver.status != "가용" and delivery.driver_id != driver.id and resolved_pickup_date <= date.today():
         raise HTTPException(status_code=400, detail="가용 상태 기사만 배정할 수 있습니다")
 
     vehicle = None
@@ -122,14 +144,6 @@ def assign_driver(
         raise HTTPException(status_code=404, detail="차량을 찾을 수 없습니다")
     if vehicle.driver_id != driver.id:
         raise HTTPException(status_code=400, detail="선택한 기사와 차량이 연결되어 있지 않습니다")
-    if not delivery.due_date and not pickup_date:
-        raise HTTPException(status_code=400, detail="납기일 또는 픽업일이 필요합니다")
-
-    resolved_pickup_date = pickup_date or calc_pickup_date(
-        delivery.due_date,
-        delivery.destination,
-        delivery.origin_si,
-    )
     if empty_return:
         round_trip = empty_return
     else:
@@ -145,7 +159,7 @@ def assign_driver(
     delivery.pickup_date = resolved_pickup_date
     delivery.status = "배차대기"
     delivery.empty_return = round_trip
-    driver.status = "운행중"
+    driver.status = "운행중" if resolved_pickup_date <= date.today() else "가용"
 
     db.commit()
     db.refresh(delivery)

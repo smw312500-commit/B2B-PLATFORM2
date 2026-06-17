@@ -61,6 +61,16 @@ def _to_float(value: Any) -> float | None:
         return None
 
 
+def _format_quantity(value: Any, unit: str) -> str | None:
+    quantity = _to_float(value)
+    clean_unit = str(unit or "").strip()
+    if quantity is None or not clean_unit:
+        return None
+    if quantity.is_integer():
+        return f"{int(quantity):,}{clean_unit}"
+    return f"{quantity:,.1f}".rstrip("0").rstrip(".") + clean_unit
+
+
 def _resolve_company_id_from_text(value: Any) -> int | None:
     if value is None:
         return None
@@ -194,7 +204,8 @@ async def create_export_dispatch_from_release_payload(
             or payload.get("quantity")
         )
         unit = str(item.get("unit") or payload.get("unit") or "").strip()
-        qty_text = f" / {quantity:,.1f}{unit}" if quantity and unit else ""
+        quantity_text = _format_quantity(quantity, unit)
+        qty_text = f" / {quantity_text}" if quantity_text else ""
         cargo_detail = f"{label_code} {company_name or item_name or '출고품'}{qty_text}".strip()[:200]
         weight_kg = _to_float(
             item.get("weight_kg")

@@ -308,6 +308,7 @@ def _list_available_candidates(
     *,
     preferred_origin_si: str | None = None,
     preferred_base_region: str | None = None,
+    target_pickup_date: date | None = None,
 ) -> list[LogisticsDriverCache]:
     required_weight = _to_float(dispatch.weight_kg)
     keep_current_driver = dispatch.status == "배차완료" and dispatch.logistics_driver_id is not None
@@ -326,6 +327,25 @@ def _list_available_candidates(
     )
 
     candidates = [driver for driver in candidates if driver.vehicle_id or driver.vehicle_plate]
+    if target_pickup_date:
+        busy_driver_ids = {
+            driver_id
+            for (driver_id,) in (
+                db.query(Dispatch.logistics_driver_id)
+                .filter(
+                    Dispatch.id != dispatch.id,
+                    Dispatch.logistics_driver_id.isnot(None),
+                    Dispatch.pickup_date == target_pickup_date,
+                    Dispatch.status.in_(["배차완료", "운행중"]),
+                )
+                .all()
+            )
+        }
+        candidates = [
+            driver
+            for driver in candidates
+            if driver.driver_id not in busy_driver_ids or driver.driver_id == dispatch.logistics_driver_id
+        ]
     if not candidates:
         return []
 
@@ -443,6 +463,7 @@ def _build_import_plan(db: Session, dispatch: Dispatch, company: CompanyInfo | N
         company,
         preferred_origin_si=preferred_origin_si,
         preferred_base_region=preferred_base_region,
+        target_pickup_date=pickup_date,
     )
 
     if not available_candidates:
@@ -494,6 +515,7 @@ def _build_export_plan(db: Session, dispatch: Dispatch, company: CompanyInfo | N
         company,
         preferred_origin_si=round_trip.preferred_origin_si if round_trip.active else None,
         preferred_base_region=round_trip.preferred_base_region if round_trip.active else None,
+        target_pickup_date=pickup_date,
     )
 
     if not available_candidates:

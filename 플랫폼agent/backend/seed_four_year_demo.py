@@ -8,7 +8,7 @@ from pathlib import Path
 
 from database import SessionLocal
 from models import CollectedRelease, Dispatch, InsightLog, LogisticsDriverCache, PackingList, ReportMessage
-from services.dispatch_auto import create_export_dispatch_from_release_payload
+from services.dispatch_auto import create_export_dispatch_from_release_payload, create_import_dispatch_from_report
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -213,6 +213,40 @@ async def seed_export_dispatches(db, messages: list[dict], dispatch_month: str |
     return count
 
 
+async def seed_import_dispatches(db, messages: list[dict], dispatch_month: str | None = None) -> int:
+    count = 0
+    for row in messages:
+        if row.get("event_type") != "agent_report_import":
+            continue
+
+        payload = row.get("payload_json") or {}
+        arrival_date = str(payload.get("arrival_date") or payload.get("due_date") or "")[:10]
+        if dispatch_month and not arrival_date.startswith(dispatch_month):
+            continue
+
+        report_id = payload.get("report_id")
+        before_ids = {
+            row_id
+            for (row_id,) in (
+                db.query(Dispatch.id)
+                .filter(
+                    Dispatch.dispatch_type == "import",
+                    Dispatch.source_report_id == report_id,
+                )
+                .all()
+            )
+        }
+        dispatch = await create_import_dispatch_from_report(
+            db,
+            company_id=int(payload.get("company_id") or 0),
+            payload=payload,
+            source_report_id=report_id,
+        )
+        if dispatch and dispatch.id not in before_ids:
+            count += 1
+    return count
+
+
 def seed_summary_insight(db):
     if db.query(InsightLog).filter(InsightLog.related_code == "DEMO4Y").first():
         return False
@@ -266,9 +300,17 @@ def main():
         should_seed_driver_cache = args.reset_demo or args.dispatch_all or not args.dispatch_month
         if should_seed_driver_cache:
             driver_count = seed_latest_driver_cache(db, snapshots)
-        dispatch_count = 0
+        export_dispatch_count = 0
+        import_dispatch_count = 0
         if args.dispatch_month or args.dispatch_all:
-            dispatch_count = asyncio.run(
+            import_dispatch_count = asyncio.run(
+                seed_import_dispatches(
+                    db,
+                    messages,
+                    None if args.dispatch_all else args.dispatch_month,
+                )
+            )
+            export_dispatch_count = asyncio.run(
                 seed_export_dispatches(
                     db,
                     messages,
@@ -278,7 +320,8 @@ def main():
         insight_added = seed_summary_insight(db)
         print(
             f"inserted report_messages={message_count}, collected_releases={release_count}, "
-            f"driver_cache_upserts={driver_count}, export_dispatches={dispatch_count}, "
+            f"driver_cache_upserts={driver_count}, import_dispatches={import_dispatch_count}, "
+            f"export_dispatches={export_dispatch_count}, "
             f"summary_insight_added={insight_added}"
         )
     finally:

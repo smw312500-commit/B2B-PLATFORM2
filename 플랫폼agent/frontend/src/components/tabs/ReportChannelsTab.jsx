@@ -247,10 +247,12 @@ function buildPackingListAttachment(message) {
 }
 
 function MessageCard({ message }) {
+  const [expanded, setExpanded] = useState(false)
   const isOutbound = message.direction === 'outbound'
   const displaySummary = buildMessageSummary(message)
   const detailRows = buildDetailRows(message)
   const packingListAttachment = buildPackingListAttachment(message)
+  const hasDetails = detailRows.length > 0 || packingListAttachment || message.payload_json
 
   return (
     <div className={`flex ${isOutbound ? 'justify-end' : 'justify-start'}`}>
@@ -276,81 +278,98 @@ function MessageCard({ message }) {
         <h3 className="text-sm font-semibold text-slate-800">{message.title}</h3>
         <p className="mt-1 text-sm leading-6 text-slate-600">{displaySummary}</p>
 
-        {detailRows.length > 0 && (
-          <div className="mt-3 grid gap-2 rounded-xl border border-slate-200 bg-white/70 p-3 sm:grid-cols-2">
-            {detailRows.map(([label, value]) => (
-              <div key={`${message.id}-${label}`} className="rounded-lg bg-slate-50 px-3 py-2">
-                <p className="text-[11px] uppercase tracking-[0.14em] text-slate-400">{label}</p>
-                <p className="mt-1 text-sm font-medium leading-6 text-slate-700">{value}</p>
-              </div>
-            ))}
+        {hasDetails && (
+          <div className="mt-3 border-t border-slate-100 pt-2">
+            <button
+              type="button"
+              onClick={() => setExpanded((value) => !value)}
+              className="flex w-full items-center justify-between rounded-xl px-2 py-2 text-left text-xs font-semibold text-slate-500 transition-colors hover:bg-slate-50"
+            >
+              <span>{expanded ? '상세 접기' : '상세 보기'}</span>
+              <span className={`text-base transition-transform ${expanded ? 'rotate-180' : ''}`}>⌄</span>
+            </button>
           </div>
         )}
 
-        {packingListAttachment && (
-          <div className="mt-3 rounded-2xl border border-sky-200 bg-sky-50/80 p-4">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-sky-700">
-                  {`패킹리스트 ${String(packingListAttachment.format || 'csv').toUpperCase()}`}
-                </p>
-                <p className="mt-1 text-sm font-semibold text-slate-800">{packingListAttachment.filename}</p>
-                <p className="mt-1 text-xs leading-5 text-slate-600">
-                  {[
-                    packingListAttachment.periodFrom && packingListAttachment.periodTo
-                      ? `${packingListAttachment.periodFrom} ~ ${packingListAttachment.periodTo}`
-                      : null,
-                    packingListAttachment.sizeText,
-                  ]
-                    .filter(Boolean)
-                    .join(' · ') || '수출 묶음 첨부파일'}
-                </p>
+        {expanded && (
+          <div className="mt-2">
+            {detailRows.length > 0 && (
+              <div className="grid gap-2 rounded-xl border border-slate-200 bg-white/70 p-3 sm:grid-cols-2">
+                {detailRows.map(([label, value]) => (
+                  <div key={`${message.id}-${label}`} className="rounded-lg bg-slate-50 px-3 py-2">
+                    <p className="text-[11px] uppercase tracking-[0.14em] text-slate-400">{label}</p>
+                    <p className="mt-1 text-sm font-medium leading-6 text-slate-700">{value}</p>
+                  </div>
+                ))}
               </div>
+            )}
 
-              {packingListAttachment.downloadUrl ? (
-                <a
-                  href={packingListAttachment.downloadUrl}
-                  className="rounded-xl border border-sky-300 bg-white px-3 py-2 text-sm font-medium text-sky-700 transition-colors hover:bg-sky-100"
-                >
-                  {`${String(packingListAttachment.format || 'csv').toUpperCase()} 다운로드`}
-                </a>
-              ) : (
-                <span className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-500">
-                  다운로드 준비중
-                </span>
-              )}
-            </div>
+            {packingListAttachment && (
+              <div className="mt-3 rounded-2xl border border-sky-200 bg-sky-50/80 p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-sky-700">
+                      {`패킹리스트 ${String(packingListAttachment.format || 'csv').toUpperCase()}`}
+                    </p>
+                    <p className="mt-1 text-sm font-semibold text-slate-800">{packingListAttachment.filename}</p>
+                    <p className="mt-1 text-xs leading-5 text-slate-600">
+                      {[
+                        packingListAttachment.periodFrom && packingListAttachment.periodTo
+                          ? `${packingListAttachment.periodFrom} ~ ${packingListAttachment.periodTo}`
+                          : null,
+                        packingListAttachment.sizeText,
+                      ]
+                        .filter(Boolean)
+                        .join(' · ') || '수출 묶음 첨부파일'}
+                    </p>
+                  </div>
 
-            <div className="mt-3 grid gap-2 sm:grid-cols-3">
-              {packingListAttachment.totalQty != null && (
-                <div className="rounded-xl bg-white px-3 py-2">
-                  <p className="text-[11px] uppercase tracking-[0.14em] text-slate-400">총수량</p>
-                  <p className="mt-1 text-sm font-semibold text-slate-700">{formatNumber(packingListAttachment.totalQty)}장</p>
+                  {packingListAttachment.downloadUrl ? (
+                    <a
+                      href={packingListAttachment.downloadUrl}
+                      className="rounded-xl border border-sky-300 bg-white px-3 py-2 text-sm font-medium text-sky-700 transition-colors hover:bg-sky-100"
+                    >
+                      {`${String(packingListAttachment.format || 'csv').toUpperCase()} 다운로드`}
+                    </a>
+                  ) : (
+                    <span className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-500">
+                      다운로드 준비중
+                    </span>
+                  )}
                 </div>
-              )}
-              {packingListAttachment.totalWeightKg != null && (
-                <div className="rounded-xl bg-white px-3 py-2">
-                  <p className="text-[11px] uppercase tracking-[0.14em] text-slate-400">총중량</p>
-                  <p className="mt-1 text-sm font-semibold text-slate-700">{formatWeight(packingListAttachment.totalWeightKg)}</p>
+
+                <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                  {packingListAttachment.totalQty != null && (
+                    <div className="rounded-xl bg-white px-3 py-2">
+                      <p className="text-[11px] uppercase tracking-[0.14em] text-slate-400">총수량</p>
+                      <p className="mt-1 text-sm font-semibold text-slate-700">{formatNumber(packingListAttachment.totalQty)}장</p>
+                    </div>
+                  )}
+                  {packingListAttachment.totalWeightKg != null && (
+                    <div className="rounded-xl bg-white px-3 py-2">
+                      <p className="text-[11px] uppercase tracking-[0.14em] text-slate-400">총중량</p>
+                      <p className="mt-1 text-sm font-semibold text-slate-700">{formatWeight(packingListAttachment.totalWeightKg)}</p>
+                    </div>
+                  )}
+                  {packingListAttachment.labelCodeCount != null && (
+                    <div className="rounded-xl bg-white px-3 py-2">
+                      <p className="text-[11px] uppercase tracking-[0.14em] text-slate-400">품목수</p>
+                      <p className="mt-1 text-sm font-semibold text-slate-700">{formatNumber(packingListAttachment.labelCodeCount)}개</p>
+                    </div>
+                  )}
                 </div>
-              )}
-              {packingListAttachment.labelCodeCount != null && (
-                <div className="rounded-xl bg-white px-3 py-2">
-                  <p className="text-[11px] uppercase tracking-[0.14em] text-slate-400">품목수</p>
-                  <p className="mt-1 text-sm font-semibold text-slate-700">{formatNumber(packingListAttachment.labelCodeCount)}개</p>
-                </div>
-              )}
-            </div>
+              </div>
+            )}
+
+            {message.payload_json && (
+              <details className="mt-3 rounded-xl border border-slate-200 bg-slate-950/95 p-3 text-xs text-slate-100">
+                <summary className="cursor-pointer select-none text-slate-300">원본 API payload</summary>
+                <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-all leading-5">
+                  {JSON.stringify(message.payload_json, null, 2)}
+                </pre>
+              </details>
+            )}
           </div>
-        )}
-
-        {message.payload_json && (
-          <details className="mt-3 rounded-xl border border-slate-200 bg-slate-950/95 p-3 text-xs text-slate-100">
-            <summary className="cursor-pointer select-none text-slate-300">원본 API payload</summary>
-            <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-all leading-5">
-              {JSON.stringify(message.payload_json, null, 2)}
-            </pre>
-          </details>
         )}
       </div>
     </div>
