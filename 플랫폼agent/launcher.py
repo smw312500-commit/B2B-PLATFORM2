@@ -44,24 +44,45 @@ def _log(msg: str) -> None:
         pass
 
 
-def _find_python() -> str:
-    for cmd in ["py", "python", "python3"]:
+def _find_uvicorn_cmd() -> list[str]:
+    """uvicorn 실행 커맨드를 찾는다. 직접 커맨드 → py -m → python -m 순으로 시도."""
+    import shutil
+
+    # 1) uvicorn 커맨드가 PATH 에 있으면 직접 사용
+    if shutil.which("uvicorn"):
+        return ["uvicorn"]
+
+    # 2) py 런처로 실행
+    if shutil.which("py"):
         try:
-            r = subprocess.run([cmd, "--version"], capture_output=True, timeout=3)
+            r = subprocess.run(["py", "-c", "import uvicorn"], capture_output=True, timeout=5)
             if r.returncode == 0:
-                return cmd
+                return ["py", "-m", "uvicorn"]
         except Exception:
             pass
-    return "python"
+
+    # 3) python 커맨드로 실행
+    for cmd in ["python", "python3"]:
+        if shutil.which(cmd):
+            try:
+                r = subprocess.run([cmd, "-c", "import uvicorn"], capture_output=True, timeout=5)
+                if r.returncode == 0:
+                    return [cmd, "-m", "uvicorn"]
+            except Exception:
+                pass
+
+    return ["uvicorn"]  # 최후 시도
 
 
-def _start_backend(py: str) -> tuple[subprocess.Popen, object]:
+def _start_backend() -> tuple[subprocess.Popen, object]:
     """launcher_main:app 으로 uvicorn 실행 (StaticFiles 포함)."""
+    uv_cmd = _find_uvicorn_cmd()
+    _log(f"uvicorn 커맨드: {uv_cmd}")
     log_file = open(LOGS_DIR / "backend.log", "a", encoding="utf-8", buffering=1)
     proc = subprocess.Popen(
-        [py, "-m", "uvicorn", "launcher_main:app",
-         "--host", "127.0.0.1",
-         "--port", "8000"],
+        uv_cmd + ["launcher_main:app",
+                  "--host", "127.0.0.1",
+                  "--port", "8000"],
         cwd=str(BACKEND_DIR),
         stdout=log_file,
         stderr=log_file,
@@ -85,17 +106,14 @@ def main() -> None:
     _log("플랫폼Agent 런처 시작")
     _log(f"BASE={BASE}")
 
-    py = _find_python()
-    _log(f"Python: {py}")
-
     dist = BACKEND_DIR.parent / "frontend" / "dist"
     if dist.exists():
-        _log(f"frontend/dist 확인 — 포트 8000 통합 서빙")
+        _log("frontend/dist 확인 — 포트 8000 통합 서빙")
     else:
-        _log("경고: frontend/dist 없음 — API 전용 모드 (프론트 미포함)")
+        _log("경고: frontend/dist 없음 — API 전용 모드")
 
     # ── 백엔드 + 정적 파일 서버 시작 ────────────────────────
-    back_proc, back_log = _start_backend(py)
+    back_proc, back_log = _start_backend()
     _log(f"백엔드 PID={back_proc.pid} (포트 8000)")
 
     # ── 백엔드 준비 대기 후 브라우저 열기 ────────────────────
