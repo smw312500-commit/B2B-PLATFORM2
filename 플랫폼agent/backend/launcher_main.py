@@ -16,6 +16,15 @@ if _DIST.exists():
     try:
         from fastapi.staticfiles import StaticFiles
 
+        # GET "/" 헬스체크 라우트가 StaticFiles 보다 우선하므로 제거
+        app.routes[:] = [
+            r for r in app.routes
+            if not (
+                getattr(r, "path", None) == "/"
+                and "GET" in getattr(r, "methods", set())
+            )
+        ]
+
         app.mount(
             "/",
             StaticFiles(directory=str(_DIST), html=True),
