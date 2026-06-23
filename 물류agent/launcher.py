@@ -11,6 +11,7 @@ DEMO_MODE=1 인 경우 backend/.env 기준으로 기사/차량 시연 데이터 
 """
 import datetime
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -46,6 +47,21 @@ def _log(msg: str) -> None:
         pass
 
 
+def _ensure_env() -> None:
+    """backend/.env 가 없으면 비밀값 없는 .env.demo 를 복사 (데모 첫 실행 대비).
+    기존 .env 가 있으면 절대 덮어쓰지 않는다(개발 PC 설정 보존)."""
+    env_path = BACKEND_DIR / ".env"
+    demo_path = BACKEND_DIR / ".env.demo"
+    if env_path.exists():
+        _log(".env 확인됨 (기존 설정 유지)")
+        return
+    if demo_path.exists():
+        shutil.copyfile(demo_path, env_path)
+        _log(".env 없음 → .env.demo 복사 (DEMO_MODE=1, 첫 실행 시연 데이터 준비)")
+    else:
+        _log("[경고] .env / .env.demo 모두 없음 - 백엔드 DB 설정 누락 가능")
+
+
 def _find_python() -> str:
     for cmd in ["py", "python", "python3"]:
         try:
@@ -59,11 +75,14 @@ def _find_python() -> str:
 
 def _start_backend(py: str) -> tuple[subprocess.Popen, object]:
     log_file = open(LOGS_DIR / "backend.log", "a", encoding="utf-8", buffering=1)
+    env = os.environ.copy()
+    env["DEMO_MODE"] = "1"  # EXE 실행 시 항상 시연 데이터 자동 준비 (dotenv 보다 우선)
     proc = subprocess.Popen(
         [py, "-m", "uvicorn", "main:app",
          "--host", "127.0.0.1",
          "--port", "8004"],
         cwd=str(BACKEND_DIR),
+        env=env,
         stdout=log_file,
         stderr=log_file,
         creationflags=CREATE_NO_WINDOW,
@@ -113,6 +132,9 @@ def main() -> None:
 
     py = _find_python()
     _log(f"Python: {py}")
+
+    # ── .env 부트스트랩 (데모 첫 실행) ───────────────────────
+    _ensure_env()
 
     # ── 백엔드 시작 ──────────────────────────────────────────
     back_proc, back_log = _start_backend(py)

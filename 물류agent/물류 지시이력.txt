@@ -358,5 +358,34 @@
     build_exe.bat 실행 (코드 변경 후 EXE 갱신 시)
 
   DEMO_MODE:
-    backend/.env 에 DEMO_MODE=1 설정 → 서버 시작 시 기사/차량 시연 데이터 자동 seed
+    launcher.py _start_backend(): subprocess env에 DEMO_MODE=1 직접 주입
+      (dotenv 보다 우선 적용 — .env에 DEMO_MODE 없어도 항상 활성화됨)
+    backend/.env.demo (기존 파일): DEMO_MODE=1 + DB 비밀번호/API 키 비어 있는 안전한 템플릿
+    backend/.env 없을 때 launcher.py _ensure_env()가 .env.demo 를 자동 복사
+
+  ※ 버그 수정 (2026-06-17):
+    _start_backend() 에 env 파라미터가 없어 DEMO_MODE가 subprocess에 전달 안 됨.
+    수정: env = os.environ.copy(); env["DEMO_MODE"] = "1" 추가 후 Popen에 env= 전달.
+    결과: EXE 실행 시 .env 내용에 무관하게 항상 DEMO_MODE=1 보장.
+
+  stop_logistics.bat 신규 (물류agent/stop_logistics.bat):
+    taskkill /F /IM LogisticsAgent.exe + 포트 8004/3001 강제 종료
+
+  빌드 및 실행 검증 (2026-06-17):
+    · build_exe.bat 실행 → PyInstaller 빌드 성공, LogisticsAgent.exe 9.0MB
+    · EXE 스모크 테스트: logs/launcher.log 기동 기록 확인
+      - BASE=E:\PROJECT\B2B PLATFORM 2\물류agent 정상 인식
+      - Python "py" 발견, 백엔드 PID 생성 (포트 8004 LISTENING)
+      - 프론트 포트 3001 LISTENING, frontend/dist 정적 서빙 확인
+      - GET /api/drivers/ / /api/vehicles/ / /api/deliveries/ 200 OK 확인
+    · start.bat 개발 흐름 영향 없음
+
+※ 로직문서 충돌/누락 사항:
+  - python -m http.server는 SPA 클라이언트 라우팅 미지원(404 fallback 없음).
+    UI가 브라우저 히스토리 직접 URL 없이 앱 내부 탭 전환만 사용하면 영향 없음.
+    필요 시 vite preview 또는 FastAPI StaticFiles 마운트로 교체 가능.
+  - EXE에 Python 런타임 미포함 → 시연 PC에 Python 설치 및 setup.bat 실행
+    (pip install -r requirements.txt + npm install) 필요. 완전 독립 배포는 별도 작업.
+  - LogisticsAgent.exe는 물류agent/ 루트에 위치해야 backend/, frontend/ 경로가
+    올바르게 인식됨 (다른 위치 이동 금지).
 ========================================

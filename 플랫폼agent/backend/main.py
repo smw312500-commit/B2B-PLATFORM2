@@ -2,6 +2,7 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
+from demo_mode import seed_demo_mode_if_enabled
 from init_db import init
 
 load_dotenv()
@@ -39,6 +40,7 @@ app.include_router(packing_list.router, prefix="/api", tags=["패킹리스트"])
 @app.on_event("startup")
 def startup():
     init()
+    seed_demo_mode_if_enabled()
 
 
 @app.get("/")

@@ -40,7 +40,7 @@ def _enrich_packing_list_payload(db: Session, payload: dict) -> dict:
     return enriched
 
 
-@router.get("/", response_model=list[ReportChannelOut])
+@router.get("", response_model=list[ReportChannelOut])
 def list_report_channels(
     completed_only: bool = Query(True),
     db: Session = Depends(get_db),

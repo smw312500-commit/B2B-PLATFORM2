@@ -178,6 +178,14 @@ async def _send(release, export_payload):
 def main():
     db = SessionLocal()
     try:
+        existing = db.query(LabelRelease).filter(
+            LabelRelease.due_date >= date(2026, 7, 1),
+            LabelRelease.due_date <= date(2026, 7, 31),
+        ).count()
+        if existing:
+            print(f"[중단] 7월 라벨 출고건이 이미 {existing}건 존재합니다. 데모 시드를 건너뜁니다.")
+            return
+
         for mid in (5, 6):
             machine = db.query(LabelMachine).filter(LabelMachine.id == mid).first()
             if machine and machine.status == "점검중":

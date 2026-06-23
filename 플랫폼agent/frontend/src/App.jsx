@@ -10,7 +10,7 @@ const TABS = [
   { id: 'dashboard', label: '대시보드' },
   { id: 'dispatch',  label: '배차 현황' },
   { id: 'report',    label: '보고 채널' },
-  { id: 'insight',   label: 'AI 인사이트' },
+  { id: 'insight',   label: 'AI팀' },
 ]
 
 export default function App() {
@@ -53,7 +53,7 @@ export default function App() {
       {/* AI 채팅 플로팅 버튼 */}
       <button
         onClick={() => setChatOpen(true)}
-        title="AI 인사이트 채팅"
+        title="AI팀 채팅"
         className="fixed bottom-6 right-6 z-30 flex h-14 w-14 items-center justify-center rounded-full bg-slate-950 text-white shadow-lg transition-all hover:bg-slate-800 hover:scale-105 active:scale-95"
       >
         <span className="text-xl">🤖</span>

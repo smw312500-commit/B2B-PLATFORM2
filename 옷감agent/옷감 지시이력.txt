@@ -551,3 +551,61 @@
 지시: (무엇을 요청했는지)
 결과: (무엇이 구현됐는지)
 ========================================
+
+----------------------------------------
+[2026-06-17] EXE 패키징 작업 지시
+지시: 최종 포트폴리오/시연 배포에서는 start.bat 실행 시 뜨는 CMD 창을 고객에게 노출하지 않도록
+  옷감agent 실행 방식을 EXE 런처 형태로 전환할 것. 데모 데이터 seed 작업은 별도 세션에서
+  DEMO_MODE 기반으로 처리 중이므로, 이 세션에서는 EXE 패키징과 실행 안정성만 담당한다.
+
+작업 기준:
+  - 기존 start.bat은 개발용으로 보존하고, 별도 실행 파일(예: FabricAgent.exe)을 만든다.
+  - EXE는 백엔드 uvicorn과 프론트 실행/정적서빙을 창 없이 실행해야 한다.
+  - 패키징된 데모 실행 환경에서는 backend/.env에 DEMO_MODE=1을 넣어 첫 실행 시 7월 원단 시연 데이터가 자동 준비되게 한다.
+  - API 키, 실제 비밀번호, 로컬 경로는 EXE나 GitHub에 포함하지 않는다.
+  - 실행 로그는 CMD 창 대신 logs 폴더 파일로 남긴다.
+  - 포트는 기존 옷감agent 기준을 유지한다: backend 8002, frontend 3000.
+  - 플랫폼 미기동 상태에서 보고 전송 실패가 나도 platform_retry가 재전송할 수 있어야 한다.
+
+완료 기준:
+  - 더블클릭으로 실행 가능
+  - CMD 창 노출 없음
+  - 빈 DB에서 DEMO_MODE=1 실행 시 옷감 7월 시연 데이터가 자동 준비됨
+  - 기존 개발용 start.bat 실행 흐름은 깨지지 않음
+
+결과: 완료 [2026-06-18]
+
+구현 산출물:
+  - launcher.py — CMD 창 없이 백엔드+프론트를 실행하는 파이썬 런처
+    · BASE 자동 인식(frozen=exe 위치 / 개발=스크립트 위치)
+    · 백엔드: backend/venv 파이썬 우선 → python -m uvicorn main:app --host 127.0.0.1
+      --port 8002 (CREATE_NO_WINDOW). DEMO_MODE=1 을 환경변수로 강제 주입 →
+      첫 실행 시 7월 원단 시연 데이터 자동 준비(demo_mode → seed_july_demo, 7월 데이터 있으면 건너뜀).
+    · 프론트: CRA 빌드본(frontend/build)을 python -m http.server 3000 으로 정적 서빙
+      (빌드본에 백엔드 URL localhost:8002 가 박혀 있어 정적 서빙으로 동작). 빌드본 없으면 npm start 폴백.
+    · _ensure_env(): backend/.env 가 없으면 비밀값 없는 .env.demo 복사(기존 .env 는 보존).
+    · 로그는 CMD 창 대신 logs/launcher.log · backend.log · frontend.log 로 기록.
+    · 백엔드 /health 준비 대기 후 브라우저(http://localhost:3000) 오픈.
+    · 플랫폼 미기동이어도 백엔드 startup 의 platform_retry 루프가 보고를 재전송.
+  - backend/.env.demo — 데모 배포용 .env 템플릿(DEMO_MODE=1, DB_PASSWORD/키 공란, COMPANY_ID=옷감사).
+    실제 키/비밀번호/로컬 경로는 EXE·저장소에 포함하지 않음.
+  - FabricAgent.spec / build_fabric_exe.bat — PyInstaller 빌드 정의(--onefile, console=False).
+    build_fabric_exe.bat: 프론트 빌드 → PyInstaller → dist/FabricAgent.exe → 루트 복사.
+  - stop_fabric.bat — FabricAgent.exe 및 포트 8002/3000 점유 프로세스 종료.
+  - .gitignore — FabricAgent.exe / dist / build / logs / *.env 제외(.env.demo 는 추적, spec 은 추적).
+  - FabricAgent.exe (루트 및 dist/, 약 9.36MB) — launcher.py 를 PyInstaller 로 패키징.
+
+검증 (실제 FabricAgent.exe 실행, 2026-06-18):
+  - exe 실행 시 가시 창 없음(MainWindowHandle=0, console=False) 확인.
+  - 백엔드 http://127.0.0.1:8002/health → 200(status ok), 프론트 :3000 → 200.
+  - launcher.log: backend/venv 파이썬 사용, .env 보존, 백엔드/프론트 PID, 브라우저 오픈 기록.
+  - DEMO_MODE 경로 실행: backend.log "[DEMO_MODE] 옷감agent 7월 시연 데이터 확인",
+    /release 7월 출고건 10건 존재(이미 시드되어 가드가 재시드 건너뜀).
+  - 비밀값/EXE 안전: FabricAgent.exe, backend/.env, logs 모두 git check-ignore 확인.
+  - 기존 start.bat / start_fast.bat 미수정(개발 흐름 보존).
+
+비고:
+  - exe 는 런처이며 백엔드 의존성은 backend/venv 에 의존(setup 시 pip install 필요).
+  - 종료는 stop_fabric.bat 또는 작업 관리자에서 FabricAgent.exe(+자식 python) 종료.
+  - python -m http.server 는 SPA 딥링크 fallback 미지원이나, 탭 전환형 UI 라 영향 없음.
+========================================

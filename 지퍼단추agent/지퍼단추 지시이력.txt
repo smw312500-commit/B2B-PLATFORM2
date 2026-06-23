@@ -613,3 +613,57 @@
 지시: (무엇을 요청했는지)
 결과: (무엇이 구현됐는지)
 ========================================
+
+----------------------------------------
+[2026-06-17] EXE 패키징 작업 지시
+지시: 최종 포트폴리오/시연 배포에서는 start.bat 실행 시 뜨는 CMD 창을 고객에게 노출하지 않도록
+  지퍼단추agent 실행 방식을 EXE 런처 형태로 전환할 것. 데모 데이터 seed 작업은 별도 세션에서
+  DEMO_MODE 기반으로 처리 중이므로, 이 세션에서는 EXE 패키징과 실행 안정성만 담당한다.
+
+작업 기준:
+  - 기존 start.bat은 개발용으로 보존하고, 별도 실행 파일(예: ZipperButtonAgent.exe)을 만든다.
+  - EXE는 백엔드 uvicorn과 프론트 실행/정적서빙을 창 없이 실행해야 한다.
+  - 패키징된 데모 실행 환경에서는 backend/.env에 DEMO_MODE=1을 넣어 첫 실행 시 7월 지퍼/단추 시연 데이터가 자동 준비되게 한다.
+  - API 키, 실제 비밀번호, 로컬 경로는 EXE나 GitHub에 포함하지 않는다.
+  - 실행 로그는 CMD 창 대신 logs 폴더 파일로 남긴다.
+  - 포트는 기존 지퍼단추agent 기준을 유지한다: backend 8003, frontend 5175.
+  - 플랫폼 미기동 상태에서 보고 전송 실패가 나도 platform_retry가 재전송할 수 있어야 한다.
+
+완료 기준:
+  - 더블클릭으로 실행 가능
+  - CMD 창 노출 없음
+  - 빈 DB에서 DEMO_MODE=1 실행 시 지퍼/단추 7월 시연 데이터가 자동 준비됨
+  - 기존 개발용 start.bat 실행 흐름은 깨지지 않음
+
+결과: 완료 (2026-06-18)
+  생성/수정 파일:
+  - launcher.py (신규)
+      · ZipperButtonAgent.exe 더블클릭 → CMD 창 없이 백엔드(8003) + 프론트(5175) 동시 기동
+      · sys.frozen 분기로 EXE/개발 양 환경 BASE 경로 자동 감지
+      · _ensure_env(): .env 없으면 .env.demo 복사 (DEMO_MODE=1)
+      · _find_python(): py → python → python3 순 탐색
+      · 백엔드 uvicorn 127.0.0.1:8003, 프론트 python -m http.server 5175 (dist/)
+      · dist 없으면 npm run dev 대체 실행
+      · 백엔드 기동 확인 후 브라우저 http://localhost:5175 자동 열기
+      · 모든 로그 → logs/launcher.log / backend.log / frontend.log
+  - backend/.env.demo (신규)
+      · DEMO_MODE=1 기본값, API 키/비밀번호 공란 — 배포용 템플릿
+  - build_exe.bat (신규)
+      · npm run build → pyinstaller --onefile --noconsole → dist/ 루트 복사 1회 실행
+  - stop_zipper.bat (신규)
+      · ZipperButtonAgent.exe 강제 종료 + 포트 8003/5175 프로세스 정리
+  - backend/main.py (수정)
+      · CORS allow_origins에 http://localhost:5175, http://127.0.0.1:5175 추가
+        (기존 5173이 잘못 남아 있던 것 수정)
+  - ZipperButtonAgent.exe (신규, 8.9 MB)
+      · PyInstaller 6.21.0 --onefile --noconsole 빌드
+      · 스모크 테스트: 포트 8003/5175 LISTENING, GET / → 200 OK 확인
+
+  ※ 로직문서 충돌/누락 사항:
+    - python -m http.server는 SPA 클라이언트 라우팅 미지원
+      (새로고침 시 404). 개발용 npm run dev / 실제 배포 시 nginx 권장.
+    - Python 런타임은 EXE에 번들되지 않음 — 실행 PC에 Python 설치 필요
+      (py/python/python3 PATH 존재 조건)
+    - taskkill /F /IM ZipperButtonAgent.exe 는 launcher EXE만 종료;
+      자식 uvicorn/http.server 프로세스는 stop_zipper.bat 포트 정리 단계에서 별도 처리
+========================================

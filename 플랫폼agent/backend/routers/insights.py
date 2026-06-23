@@ -11,6 +11,8 @@ from models import InsightLog
 from schemas import InsightOut
 from services.ai_insight import generate_insights
 from services.insight_query import query_insight
+from services.research_verifier import verify_handoffs, verify_handoffs_web
+from services.report_writer import compose_cross_team_report
 
 router = APIRouter()
 
@@ -76,6 +78,32 @@ def get_demo_supply_chain_insight_seed():
         "finished_shipments": _read_demo_csv("finished_shipments.csv"),
         "logistics_performance": _read_demo_csv("logistics_performance.csv"),
     }
+
+
+@router.post("/insights/research/verify")
+async def verify_research_handoff(body: dict):
+    handoffs = body.get("handoffs") or []
+    if not isinstance(handoffs, list) or not handoffs:
+        raise HTTPException(status_code=400, detail="handoffs가 필요합니다")
+    mode = str(body.get("mode") or "web").strip().lower()
+    if mode == "demo":
+        return verify_handoffs(handoffs)
+    try:
+        return await verify_handoffs_web(handoffs)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"웹 검증 실패: {exc}") from exc
+
+
+@router.post("/insights/report/compose")
+async def compose_insight_report(body: dict):
+    insight_reports = body.get("insight_team_reports") or []
+    research_reports = body.get("research_team_reports") or []
+    if not insight_reports and not research_reports:
+        raise HTTPException(status_code=400, detail="종합할 팀 보고가 필요합니다")
+    try:
+        return await compose_cross_team_report(body)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"보고서 작성 실패: {exc}") from exc
 
 
 @router.post("/insights/analyze", response_model=List[InsightOut])

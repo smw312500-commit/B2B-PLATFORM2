@@ -11,6 +11,8 @@ export const rematchDispatch = (dispatchId) => api.post(`/dispatch/${dispatchId}
 export const getInsights = () => api.get('/insights')
 export const analyzeInsights = () => api.post('/insights/analyze')
 export const getDemoSupplyChainData = () => api.get('/insights/demo-supply-chain')
+export const verifyResearchHandoffs = (handoffs, mode = 'web') => api.post('/insights/research/verify', { handoffs, mode })
+export const composeInsightReport = (payload) => api.post('/insights/report/compose', payload)
 export const getReportChannels = () => api.get('/report-channels')
 export const getReportChannelMessages = (channel, params) => api.get(`/report-channels/${channel}/messages`, { params })
 export const getPackingListDownloadUrl = (packingListId) => `/api/packing-lists/${packingListId}/download`

@@ -175,6 +175,14 @@ async def _send(db, release):
 def main():
     db = SessionLocal()
     try:
+        existing = db.query(ZipperRelease).filter(
+            ZipperRelease.due_date >= date(2026, 7, 1),
+            ZipperRelease.due_date <= date(2026, 7, 31),
+        ).count()
+        if existing:
+            print(f"[중단] 7월 지퍼단추 출고건이 이미 {existing}건 존재합니다. 데모 시드를 건너뜁니다.")
+            return
+
         for week in WEEKS:
             print("===", week["label"], "===")
             _restock(db, week)

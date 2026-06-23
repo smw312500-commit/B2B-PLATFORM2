@@ -84,6 +84,9 @@ function isDone(status) {
 }
 
 function isRoundTrip(dispatch) {
+  if (dispatch.is_round_trip === true) {
+    return true
+  }
   const memo = `${dispatch.empty_return || ''} ${dispatch.logistics_message || ''}`
   return memo.includes('연결완료') || (memo.includes('수입품') && memo.includes('수출물건'))
 }

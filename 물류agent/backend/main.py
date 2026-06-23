@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from database import engine, Base, SessionLocal, ensure_schema_updates
+from demo_mode import seed_demo_mode_if_enabled
 from routers import drivers, vehicles, deliveries, ai_agent, platform
 from services.platform_sync import sync_drivers_to_platform
 
@@ -26,6 +27,7 @@ app.include_router(platform.router, prefix="/api/platform", tags=["플랫폼 연
 
 @app.on_event("startup")
 def startup():
+    seed_demo_mode_if_enabled()
     db = SessionLocal()
     try:
         sync_drivers_to_platform(db)

@@ -11,10 +11,16 @@ from services.report_message import record_channel_message
 router = APIRouter()
 
 
+def _is_round_trip(d: Dispatch) -> bool:
+    memo = f"{d.empty_return or ''} {d.logistics_message or ''}"
+    return "연결완료" in memo or ("수입품" in memo and "수출물건" in memo)
+
+
 def _enrich(d: Dispatch) -> DispatchOut:
     out = DispatchOut.from_orm(d)
     if d.company:
         out.company_name = d.company.company_name
+    out.is_round_trip = _is_round_trip(d)
     return out
 
 

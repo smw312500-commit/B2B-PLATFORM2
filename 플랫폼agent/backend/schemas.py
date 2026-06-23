@@ -94,6 +94,7 @@ class DispatchOut(BaseModel):
     logistics_vehicle_id: Optional[int] = None
     vehicle_plate: Optional[str] = None
     empty_return: Optional[str] = None
+    is_round_trip: Optional[bool] = False
     logistics_message: Optional[str] = None
     status: Optional[str] = None
     created_at: Optional[datetime] = None
